@@ -1,0 +1,14 @@
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Pihole
+metadata:
+  name: pihole-sample
+  namespace: default
+spec:
+  size: 1
+  adminPassword: "test"
+  timezone: "America/New_York"
+  storageSize: "2Gi"
+  storageClass: "standard"  # Optional: omit to use default storage class
+  dnsServiceType: "ClusterIP"  # Options: ClusterIP, NodePort, LoadBalancer
+  webServiceType: "ClusterIP"  # Options: ClusterIP, NodePort, LoadBalancer
+  image: "docker.io/pihole/pihole:2025.11.0"
