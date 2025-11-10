@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/cache.duchaine.dev_piholes.yaml
+- bases/cache.duchaine.dev_blocklists.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
