@@ -73,6 +73,11 @@ type PiholeListResponse struct {
 	Comment string `json:"comment"`
 }
 
+// PiholeListsWrapper wraps the lists response
+type PiholeListsWrapper struct {
+	Lists []PiholeListResponse `json:"lists"`
+}
+
 // Init initializes the reconciler
 func (r *BlocklistReconciler) Init() {
 	if r.httpClient == nil {
@@ -318,6 +323,9 @@ func (r *BlocklistReconciler) applyBlocklistToPihole(ctx context.Context, pihole
 		existingLists = []PiholeListResponse{}
 	}
 
+	// Track if we made any changes
+	modified := false
+
 	// Apply each source
 	for _, source := range blocklist.Spec.Sources {
 		// Check if already exists
@@ -326,7 +334,16 @@ func (r *BlocklistReconciler) applyBlocklistToPihole(ctx context.Context, pihole
 			if existing.Address == source {
 				log.Info("Blocklist source already exists", "source", source, "id", existing.ID)
 				found = true
-				// TODO: Update if needed (enabled status, comment, etc.)
+
+				// Check if we need to update enabled status
+				if existing.Enabled != blocklist.Spec.Enabled {
+					log.Info("Updating blocklist enabled status", "source", source, "enabled", blocklist.Spec.Enabled)
+					if err := r.updateBlocklistSource(ctx, baseURL, sid, existing.ID, source, blocklist, log); err != nil {
+						log.Error(err, "Failed to update blocklist", "source", source)
+					} else {
+						modified = true
+					}
+				}
 				break
 			}
 		}
@@ -335,7 +352,17 @@ func (r *BlocklistReconciler) applyBlocklistToPihole(ctx context.Context, pihole
 			if err := r.addBlocklistSource(ctx, baseURL, sid, source, blocklist, log); err != nil {
 				return fmt.Errorf("failed to add source %s: %w", source, err)
 			}
+			modified = true
 		}
+	}
+
+	// Reload gravity if we made changes
+	if modified {
+		if err := r.reloadGravity(ctx, baseURL, sid, log); err != nil {
+			return fmt.Errorf("failed to reload gravity: %w", err)
+		}
+	} else {
+		log.Info("No changes needed, skipping gravity reload")
 	}
 
 	return nil
@@ -365,8 +392,17 @@ func (r *BlocklistReconciler) getBlocklists(ctx context.Context, baseURL, sid st
 		return nil, fmt.Errorf("get lists failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
+	// Try to parse as wrapped response first
+	var wrapper PiholeListsWrapper
+	if err := json.Unmarshal(body, &wrapper); err == nil && len(wrapper.Lists) > 0 {
+		return wrapper.Lists, nil
+	}
+
+	// Fallback: try direct array
 	var lists []PiholeListResponse
 	if err := json.Unmarshal(body, &lists); err != nil {
+		// Log the actual response for debugging
+		log.Error(err, "Failed to parse lists response", "body", string(body))
 		return nil, fmt.Errorf("failed to parse lists: %w", err)
 	}
 
@@ -422,6 +458,77 @@ func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, baseURL, s
 	return nil
 }
 
+// updateBlocklistSource updates an existing blocklist source
+func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, baseURL, sid string, listID int, source string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
+	url := fmt.Sprintf("%s/api/lists/%d", baseURL, listID)
+
+	listReq := PiholeListRequest{
+		Address: source,
+		Comment: fmt.Sprintf("%s (managed)", blocklist.Spec.Description),
+		Groups:  []int{0},
+		Enabled: blocklist.Spec.Enabled,
+	}
+
+	jsonData, err := json.Marshal(listReq)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", sid)
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("update failed: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	log.Info("Successfully updated source", "source", source, "id", listID)
+	return nil
+}
+
+// reloadGravity triggers Pi-hole gravity to update blocklists
+func (r *BlocklistReconciler) reloadGravity(ctx context.Context, baseURL, sid string, log logr.Logger) error {
+	url := fmt.Sprintf("%s/api/action/gravity", baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create gravity request: %w", err)
+	}
+
+	req.Header.Set("Accept", "text/plain")
+	req.Header.Set("X-FTL-SID", sid)
+
+	log.Info("Triggering gravity reload")
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("gravity request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("gravity reload failed: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	log.Info("Gravity reload triggered successfully", "status", resp.StatusCode, "response", string(body))
+	return nil
+}
+
 // removeBlocklistFromPihole removes blocklist sources from Pi-hole
 func (r *BlocklistReconciler) removeBlocklistFromPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	serviceName := pihole.Name + "-web"
@@ -447,6 +554,9 @@ func (r *BlocklistReconciler) removeBlocklistFromPihole(ctx context.Context, pih
 		return fmt.Errorf("failed to get lists: %w", err)
 	}
 
+	// Track if we deleted anything
+	deleted := false
+
 	// Delete matching sources
 	for _, source := range blocklist.Spec.Sources {
 		for _, existing := range existingLists {
@@ -463,7 +573,16 @@ func (r *BlocklistReconciler) removeBlocklistFromPihole(ctx context.Context, pih
 				resp.Body.Close()
 
 				log.Info("Deleted blocklist source", "source", source, "id", existing.ID)
+				deleted = true
 			}
+		}
+	}
+
+	// Reload gravity if we deleted anything
+	if deleted {
+		if err := r.reloadGravity(ctx, baseURL, sid, log); err != nil {
+			log.Error(err, "Failed to reload gravity after deletion")
+			// Don't fail the deletion if gravity reload fails
 		}
 	}
 
@@ -477,4 +596,3 @@ func (r *BlocklistReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&cachev1alpha1.Blocklist{}).
 		Complete(r)
 }
-
