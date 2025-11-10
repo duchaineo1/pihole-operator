@@ -1,0 +1,49 @@
+
+name: Build and Release (Test)
+
+on:
+  push:
+    branches:
+      - test-ci
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/my-controller
+  CHART_NAME: my-controller
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build Docker image
+        run: |
+          docker build -t $IMAGE_NAME:${{ github.sha }} .
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker push $IMAGE_NAME:${{ github.sha }}
+
+      - name: Package Helm chart
+        run: |
+          helm package charts/$CHART_NAME
+          mkdir artifacts
+          mv $CHART_NAME-*.tgz artifacts/
+
+      - name: Create GitHub Release (test)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-${{ github.sha }}
+          name: "Test Release ${{ github.sha }}"
+          files: artifacts/*.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
