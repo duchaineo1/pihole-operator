@@ -6,6 +6,7 @@ on:
     branches:
       - test-ci
 
+
 permissions:
   contents: write
   packages: write
