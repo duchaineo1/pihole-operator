@@ -12,8 +12,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/my-controller
-  CHART_NAME: my-controller
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/pihole-operator
+  CHART_NAME: pihole-operator
 
 jobs:
   build-and-push:
@@ -35,9 +35,9 @@ jobs:
 
       - name: Package Helm chart
         run: |
-          helm package charts/$CHART_NAME
+          helm package dist/chart/
           mkdir artifacts
-          mv $CHART_NAME-*.tgz artifacts/
+          mv *.tgz artifacts/
 
       - name: Create GitHub Release (test)
         uses: softprops/action-gh-release@v2
