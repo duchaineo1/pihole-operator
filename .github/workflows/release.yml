@@ -1,50 +1,77 @@
 
-name: Build and Release (Test)
+name: Build and Release
 
 on:
   push:
     branches:
+      - main
       - test-ci
-
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/pihole-operator
-  CHART_NAME: pihole-operator
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/my-controller
+  CHART_NAME: my-controller
+  REGISTRY: ghcr.io
 
 jobs:
-  build-and-push:
+  build-and-release:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # so we can inspect tags
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
-      - name: Build Docker image
+      - name: Determine version
+        id: vars
         run: |
-          docker build -t $IMAGE_NAME:${{ github.sha }} .
-          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker push $IMAGE_NAME:${{ github.sha }}
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            # Find latest tag and bump patch
+            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            IFS='.' read -r major minor patch <<<"${LATEST#v}"
+            NEW_TAG="v${major}.${minor}.$((patch + 1))"
+            TAG="$NEW_TAG"
+            echo "Bumping from $LATEST → $NEW_TAG"
+          else
+            SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+            TAG="test-${SHORT_SHA}"
+          fi
+
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "Version tag resolved: $TAG"
+
+      - name: Login to GHCR
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login $REGISTRY -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t $IMAGE_NAME:${{ steps.vars.outputs.TAG }} .
+          docker push $IMAGE_NAME:${{ steps.vars.outputs.TAG }}
+
+          # Also tag as latest if main branch
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            docker tag $IMAGE_NAME:${{ steps.vars.outputs.TAG }} $IMAGE_NAME:latest
+            docker push $IMAGE_NAME:latest
+          fi
 
       - name: Package Helm chart
         run: |
-          helm package dist/chart/
-          mkdir artifacts
-          mv *.tgz artifacts/
+          helm package dist/chart --version ${{ steps.vars.outputs.TAG }}
 
-      - name: Create GitHub Release (test)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: test-${{ github.sha }}
-          name: "Test Release ${{ github.sha }}"
-          files: artifacts/*.tgz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      - name: Push Helm chart to GHCR (OCI)
+        run: |
+          helm registry login $REGISTRY -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+          helm push $CHART_NAME-${{ steps.vars.outputs.TAG }}.tgz oci://$REGISTRY/${{ github.repository_owner }}
