@@ -12,8 +12,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/my-controller
-  CHART_NAME: my-controller
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/pihole-operator
+  CHART_NAME: pihole-operator
   REGISTRY: ghcr.io
 
 jobs:
