@@ -1,0 +1,12 @@
+# Create Blocklist (automatically applied to home-pihole)
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Blocklist
+metadata:
+  name: ads-blocklist
+  namespace: default  # Same namespace!
+spec:
+  enabled: true
+  sources:
+    - https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt
+  description: "Blocks ads"
+  syncInterval: 1440

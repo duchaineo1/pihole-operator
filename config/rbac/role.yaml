@@ -48,6 +48,7 @@ rules:
 - apiGroups:
   - cache.duchaine.dev
   resources:
+  - blocklists
   - piholes
   verbs:
   - create
@@ -60,12 +61,14 @@ rules:
 - apiGroups:
   - cache.duchaine.dev
   resources:
+  - blocklists/finalizers
   - piholes/finalizers
   verbs:
   - update
 - apiGroups:
   - cache.duchaine.dev
   resources:
+  - blocklists/status
   - piholes/status
   verbs:
   - get

@@ -6,6 +6,8 @@ cliVersion: 4.9.0
 domain: duchaine.dev
 layout:
 - go.kubebuilder.io/v4
+plugins:
+  helm.kubebuilder.io/v1-alpha: {}
 projectName: pihole-operator
 repo: github.com/duchaineo1/pihole-operator
 resources:
@@ -16,6 +18,15 @@ resources:
   domain: duchaine.dev
   group: cache
   kind: Pihole
+  path: github.com/duchaineo1/pihole-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: duchaine.dev
+  group: cache
+  kind: Blocklist
   path: github.com/duchaineo1/pihole-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

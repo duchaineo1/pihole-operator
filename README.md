@@ -7,7 +7,7 @@ Goal of this project was to supply a way to declaratively configure a Pihole ins
 ### Feature goals
 
 1. Functional Pihole [x]
-2. Blocklists []
+2. Blocklists [x]
 3. Whitelist []
 4. Records []
 
