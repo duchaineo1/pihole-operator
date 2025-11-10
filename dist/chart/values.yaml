@@ -1,4 +1,5 @@
 # [MANAGER]: Manager Deployment Configurations
+#  
 controllerManager:
   replicas: 1
   container:
