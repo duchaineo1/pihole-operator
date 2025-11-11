@@ -1,0 +1,62 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/pihole-operator
+  CHART_NAME: pihole-operator
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # we need tags for version bumping
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Determine next version
+        id: vars
+        run: |
+          # Get latest tag (defaults to v0.0.0 if none)
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          IFS='.' read -r major minor patch <<<"${LATEST#v}"
+          NEW_TAG="v${major}.${minor}.$((patch + 1))"
+          echo "Bumping from $LATEST → $NEW_TAG"
+          echo "TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Login to GHCR
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login $REGISTRY -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t $IMAGE_NAME:${{ steps.vars.outputs.TAG }} .
+          docker push $IMAGE_NAME:${{ steps.vars.outputs.TAG }}
+
+          # Also tag as latest
+          docker tag $IMAGE_NAME:${{ steps.vars.outputs.TAG }} $IMAGE_NAME:latest
+          docker push $IMAGE_NAME:latest
+
+      - name: Package Helm chart
+        run: |
+          helm package dist/chart --version ${{ steps.vars.outputs.TAG }}
+
+      - name: Push Helm chart to GHCR (OCI)
+        run: |
+          helm registry login $REGISTRY -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+          helm push $CHART_NAME-${{ steps.vars.outputs.TAG }}.tgz oci://$REGISTRY/${{ github.repository_owner }}
+
