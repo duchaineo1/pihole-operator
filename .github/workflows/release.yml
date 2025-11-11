@@ -1,11 +1,9 @@
-
-
 name: Build and Release
 
 on:
   push:
     branches:
-      - test-ci
+      - main
 
 permissions:
   contents: write
