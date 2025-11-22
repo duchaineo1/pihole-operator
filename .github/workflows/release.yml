@@ -28,46 +28,58 @@ jobs:
         id: vars
         run: |
           LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          IFS='.' read -r major minor patch <<<"${LATEST#v}"
-          NEW_TAG="v${major}.${minor}.$((patch + 1)}"
-          echo "Bumping from $LATEST → $NEW_TAG"
-          echo "TAG=$NEW_TAG" >> $GITHUB_OUTPUT
+          VERSION="${LATEST#v}"
+          IFS='.' read -r major minor patch <<< "$VERSION"
+          NEW_TAG="v${major}.${minor}.$((patch + 1))"
+          echo "Bumping from $LATEST to $NEW_TAG"
+          echo "TAG=$NEW_TAG" >> "$GITHUB_OUTPUT"
       
       - name: Login to GHCR
         run: echo ${{ secrets.GITHUB_TOKEN }} | docker login $REGISTRY -u ${{ github.actor }} --password-stdin
       
       - name: Build and push Docker image
+        env:
+          TAG: ${{ steps.vars.outputs.TAG }}
         run: |
-          docker build -t $IMAGE_NAME:${{ steps.vars.outputs.TAG }} .
-          docker push $IMAGE_NAME:${{ steps.vars.outputs.TAG }}
-          docker tag $IMAGE_NAME:${{ steps.vars.outputs.TAG }} $IMAGE_NAME:latest
+          docker build -t $IMAGE_NAME:$TAG .
+          docker push $IMAGE_NAME:$TAG
+          docker tag $IMAGE_NAME:$TAG $IMAGE_NAME:latest
           docker push $IMAGE_NAME:latest
       
       - name: Update Helm chart versions
+        env:
+          TAG: ${{ steps.vars.outputs.TAG }}
         run: |
-          TAG=${{ steps.vars.outputs.TAG }}
           VERSION=${TAG#v}
           
           # Update Chart.yaml
-          sed -i "s/^version:.*/version: $VERSION/" dist/chart/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: \"$TAG\"/" dist/chart/Chart.yaml
+          yq eval -i ".version = \"$VERSION\"" dist/chart/Chart.yaml
+          yq eval -i ".appVersion = \"$TAG\"" dist/chart/Chart.yaml
           
-          # Update values.yaml with tagged image (nested under controllerManager.container.image)
-          sed -i "/controllerManager:/,/image:/{s|repository:.*|repository: $IMAGE_NAME|}" dist/chart/values.yaml
-          sed -i "/controllerManager:/,/image:/{s|tag:.*|tag: $TAG|}" dist/chart/values.yaml
+          # Update values.yaml with tagged image
+          yq eval -i ".controllerManager.container.image.repository = \"$IMAGE_NAME\"" dist/chart/values.yaml
+          yq eval -i ".controllerManager.container.image.tag = \"$TAG\"" dist/chart/values.yaml
+          
+          echo "Updated chart to version $VERSION with image tag $TAG"
       
       - name: Package Helm chart
+        env:
+          TAG: ${{ steps.vars.outputs.TAG }}
         run: |
           helm package dist/chart
       
       - name: Push Helm chart to GHCR (OCI)
+        env:
+          TAG: ${{ steps.vars.outputs.TAG }}
         run: |
           helm registry login $REGISTRY -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
-          helm push $CHART_NAME-${{ steps.vars.outputs.TAG }}.tgz oci://$REGISTRY/${{ github.repository_owner }}
+          helm push $CHART_NAME-${TAG#v}.tgz oci://$REGISTRY/${{ github.repository_owner }}
       
       - name: Create Git tag
+        env:
+          TAG: ${{ steps.vars.outputs.TAG }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.vars.outputs.TAG }}
-          git push origin ${{ steps.vars.outputs.TAG }}
+          git tag $TAG
+          git push origin $TAG
