@@ -25,7 +25,7 @@ spec:
         {{- end }}
         {{- end }}
     spec:
-      {{- if .Values.controllerManager.imagePullSecrets }}
+      {{- if gt (len .Values.controllerManager.imagePullSecrets) 0 }}
       imagePullSecrets:
         {{- toYaml .Values.controllerManager.imagePullSecrets | nindent 8 }}
       {{- end }}

@@ -145,7 +145,7 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 
-		pihole.Status.AdminPasswordSecret = pihole.Name + "-admin"
+		pihole.Status.AdminPasswordSecret = adminSecretName(pihole)
 		pihole.Status.ServiceName = pihole.Name
 		if err := r.Status().Update(ctx, pihole); err != nil {
 			log.Error(err, "Failed to update pihole status")
@@ -204,6 +204,8 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	pihole.Status.ReadyReplicas = found.Status.ReadyReplicas
+	pihole.Status.AdminPasswordSecret = adminSecretName(pihole)
+	pihole.Status.ServiceName = pihole.Name
 
 	meta.SetStatusCondition(&pihole.Status.Conditions, metav1.Condition{
 		Type:    typeAvailablePihole,
@@ -220,9 +222,36 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{}, nil
 }
 
+// adminSecretName returns the secret name to use for the admin password.
+func adminSecretName(pihole *piholev1alpha1.Pihole) string {
+	if pihole.Spec.AdminPasswordSecretRef != nil {
+		return pihole.Spec.AdminPasswordSecretRef.Name
+	}
+	return pihole.Name + "-admin"
+}
+
+// adminSecretKey returns the secret key to use for the admin password.
+func adminSecretKey(pihole *piholev1alpha1.Pihole) string {
+	if pihole.Spec.AdminPasswordSecretRef != nil && pihole.Spec.AdminPasswordSecretRef.Key != "" {
+		return pihole.Spec.AdminPasswordSecretRef.Key
+	}
+	return "password"
+}
+
 func (r *PiholeReconciler) reconcileSecret(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
+	// If an existing secret ref is set, validate it exists and skip creation
+	if pihole.Spec.AdminPasswordSecretRef != nil {
+		secret := &corev1.Secret{}
+		err := r.Get(ctx, types.NamespacedName{Name: pihole.Spec.AdminPasswordSecretRef.Name, Namespace: pihole.Namespace}, secret)
+		if err != nil {
+			return fmt.Errorf("referenced adminPasswordSecretRef %q not found: %w", pihole.Spec.AdminPasswordSecretRef.Name, err)
+		}
+		log.Info("Using existing secret for admin password", "Secret.Name", pihole.Spec.AdminPasswordSecretRef.Name)
+		return nil
+	}
+
 	secret := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Name: pihole.Name + "-admin", Namespace: pihole.Namespace}, secret)
+	err := r.Get(ctx, types.NamespacedName{Name: adminSecretName(pihole), Namespace: pihole.Namespace}, secret)
 
 	if err != nil && apierrors.IsNotFound(err) {
 		secret, err := r.secretForPihole(pihole)
@@ -396,9 +425,9 @@ func (r *PiholeReconciler) deploymentForPihole(
 								ValueFrom: &corev1.EnvVarSource{
 									SecretKeyRef: &corev1.SecretKeySelector{
 										LocalObjectReference: corev1.LocalObjectReference{
-											Name: pihole.Name + "-admin",
+											Name: adminSecretName(pihole),
 										},
-										Key: "password",
+										Key: adminSecretKey(pihole),
 									},
 								},
 							},

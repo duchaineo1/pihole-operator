@@ -20,6 +20,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// SecretKeyRef references a key within an existing Secret.
+type SecretKeyRef struct {
+	// Name is the name of the secret
+	Name string `json:"name"`
+
+	// Key is the key within the secret to use
+	// +optional
+	// +kubebuilder:default="password"
+	Key string `json:"key,omitempty"`
+}
+
 // PiholeSpec defines the desired state of Pihole
 type PiholeSpec struct {
 	// Size is the number of pihole instances (replicas)
@@ -31,6 +42,11 @@ type PiholeSpec struct {
 	// If not provided, a random password will be generated
 	// +optional
 	AdminPassword string `json:"adminPassword,omitempty"`
+
+	// AdminPasswordSecretRef references an existing Secret containing the admin password.
+	// When set, the operator will not create a secret and will use this reference instead.
+	// +optional
+	AdminPasswordSecretRef *SecretKeyRef `json:"adminPasswordSecretRef,omitempty"`
 
 	// Timezone for Pi-hole (e.g., "America/New_York", "Europe/London")
 	// +optional

@@ -38,6 +38,10 @@ type BlocklistReconciler struct {
 	httpClient *http.Client
 	sidCache   map[string]*cachedSID
 	mu         sync.Mutex
+
+	// BaseURLOverride maps "namespace/name" to a base URL. Used in tests to
+	// point at an httptest server instead of the in-cluster service URL.
+	BaseURLOverride map[string]string
 }
 
 // cachedSID stores session information
@@ -292,10 +296,18 @@ func (r *BlocklistReconciler) getSID(ctx context.Context, baseURL, password, cac
 }
 
 // applyBlocklistToPihole applies blocklist via Pi-hole API
+// piholeAdminSecretName returns the admin secret name from status, falling back to the default name.
+func piholeAdminSecretName(pihole *cachev1alpha1.Pihole) string {
+	if pihole.Status.AdminPasswordSecret != "" {
+		return pihole.Status.AdminPasswordSecret
+	}
+	return pihole.Name + "-admin"
+}
+
 func (r *BlocklistReconciler) applyBlocklistToPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	// Get service and secret
 	serviceName := pihole.Name + "-web"
-	secretName := pihole.Name + "-admin"
+	secretName := piholeAdminSecretName(pihole)
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: pihole.Namespace}, secret); err != nil {
@@ -307,8 +319,11 @@ func (r *BlocklistReconciler) applyBlocklistToPihole(ctx context.Context, pihole
 		return fmt.Errorf("password not found in secret")
 	}
 
-	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
 	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
+	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
+	if override, ok := r.BaseURLOverride[cacheKey]; ok {
+		baseURL = override
+	}
 
 	// Get session
 	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
@@ -532,7 +547,7 @@ func (r *BlocklistReconciler) reloadGravity(ctx context.Context, baseURL, sid st
 // removeBlocklistFromPihole removes blocklist sources from Pi-hole
 func (r *BlocklistReconciler) removeBlocklistFromPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	serviceName := pihole.Name + "-web"
-	secretName := pihole.Name + "-admin"
+	secretName := piholeAdminSecretName(pihole)
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: pihole.Namespace}, secret); err != nil {
@@ -540,8 +555,11 @@ func (r *BlocklistReconciler) removeBlocklistFromPihole(ctx context.Context, pih
 	}
 
 	password := string(secret.Data["password"])
-	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
 	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
+	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
+	if override, ok := r.BaseURLOverride[cacheKey]; ok {
+		baseURL = override
+	}
 
 	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
 	if err != nil {

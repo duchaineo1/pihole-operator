@@ -44,6 +44,21 @@ spec:
                   AdminPassword is the password for the Pi-hole web interface
                   If not provided, a random password will be generated
                 type: string
+              adminPasswordSecretRef:
+                description: |-
+                  AdminPasswordSecretRef references an existing Secret containing the admin password.
+                  When set, the operator will not create a secret and will use this reference instead.
+                properties:
+                  key:
+                    default: password
+                    description: Key is the key within the secret to use
+                    type: string
+                  name:
+                    description: Name is the name of the secret
+                    type: string
+                required:
+                - name
+                type: object
               dnsLoadBalancerIP:
                 description: DnsLoadBalancerIP is the IP to use for DNS LoadBalancer
                   service type
