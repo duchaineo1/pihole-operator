@@ -1,34 +1,138 @@
 # pihole-operator
-An operator to Deploy Pihole
 
-## Description
-Goal of this project was to supply a way to declaratively configure a Pihole instance 
+A Kubernetes operator to declaratively deploy and configure Pi-hole instances.
 
-### Feature goals
+## Features
 
-1. Functional Pihole [x]
-2. Blocklists [x]
-3. Whitelist []
-4. Records []
+- [x] Deploy Pi-hole with a single custom resource
+- [x] Manage blocklists declaratively
+- [ ] Whitelist management
+- [ ] DNS record management
 
-## installation
+## Installation
 
 ```bash
 git clone https://github.com/duchaineo1/pihole-operator.git
 cd pihole-operator/
 pushd dist/chart
 helm install -n pihole-operator pihole-operator . -f values.yaml
-podp
-kubectl apply -f config/samples/cache_v1alpha1_pihole.yaml
+popd
+```
+
+## Usage
+
+### Pihole
+
+Create a `Pihole` resource to deploy a Pi-hole instance:
+
+```yaml
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Pihole
+metadata:
+  name: my-pihole
+spec:
+  size: 1
+  timezone: "America/New_York"
+```
+
+The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret containing the admin password.
+
+#### Spec fields
+
+| Field | Default | Description |
+|---|---|---|
+| `size` | `1` | Number of replicas |
+| `adminPassword` | random | Password for the web UI. Omit to auto-generate. |
+| `adminPasswordSecretRef` | — | Reference to an existing Secret (see below) |
+| `timezone` | `UTC` | Timezone (e.g. `America/New_York`) |
+| `storageSize` | `1Gi` | PVC size for Pi-hole data |
+| `storageClass` | cluster default | Storage class for the PVC |
+| `dnsServiceType` | `NodePort` | Service type for DNS (`ClusterIP`, `NodePort`, `LoadBalancer`) |
+| `webServiceType` | `ClusterIP` | Service type for the web UI |
+| `dnsLoadBalancerIP` | — | Static IP for DNS LoadBalancer |
+| `webLoadBalancerIP` | — | Static IP for Web LoadBalancer |
+| `image` | `docker.io/pihole/pihole:2025.11.0` | Container image |
+
+#### Admin password
+
+There are three ways to configure the admin password:
+
+**Auto-generated (default)** — omit both `adminPassword` and `adminPasswordSecretRef`. The operator creates a Secret named `<pihole-name>-admin` with a random 16-character password.
+
+```yaml
+spec: {}
+```
+
+Retrieve it with:
+
+```bash
+kubectl get secret my-pihole-admin -o jsonpath='{.data.password}' | base64 -d
+```
+
+**Inline password** — set `adminPassword` directly. The operator creates the Secret for you.
+
+```yaml
+spec:
+  adminPassword: "my-password"
+```
+
+**Existing Secret** — set `adminPasswordSecretRef` to reference a Secret you manage yourself. The operator will not create or modify the Secret.
+
+```yaml
+spec:
+  adminPasswordSecretRef:
+    name: my-pihole-secret
+    key: password          # optional, defaults to "password"
+```
+
+When `adminPasswordSecretRef` is set, `adminPassword` is ignored.
+
+### Blocklist
+
+Create a `Blocklist` resource to manage blocklists. It is automatically applied to all `Pihole` instances in the same namespace.
+
+```yaml
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Blocklist
+metadata:
+  name: ads
+spec:
+  enabled: true
+  sources:
+    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+  description: "Ad-blocking hosts"
+  syncInterval: 1440
+```
+
+#### Spec fields
+
+| Field | Default | Description |
+|---|---|---|
+| `sources` | (required) | List of blocklist URLs (1-100) |
+| `enabled` | `true` | Whether the blocklist is active |
+| `syncInterval` | `1440` | Re-sync interval in minutes (60-10080) |
+| `description` | — | Human-readable description |
+
+## Examples
+
+See the [`examples/`](examples/) directory for ready-to-use manifests:
+
+- [`basic.yaml`](examples/basic.yaml) — minimal Pi-hole with defaults
+- [`full.yaml`](examples/full.yaml) — all options configured
+- [`existing-secret.yaml`](examples/existing-secret.yaml) — using a pre-existing Secret for the admin password
+- [`blocklist.yaml`](examples/blocklist.yaml) — ad-blocking blocklist
+
+Apply an example:
+
+```bash
+kubectl apply -f examples/basic.yaml
 ```
 
 ## Contributing
 
 Feel free to open a PR with your suggested change!
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+Run `make help` for available make targets. More info at the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html).
 
 ## License
 
@@ -45,4 +149,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
