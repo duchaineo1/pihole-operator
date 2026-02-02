@@ -61,6 +61,9 @@ type PiholeReconciler struct {
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords/finalizers,verbs=update
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
