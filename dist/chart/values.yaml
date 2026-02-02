@@ -6,7 +6,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/duchaineo1/pihole-operator
-      tag: v1.0.3
+      tag: v1.0.4
     imagePullPolicy: IfNotPresent
     args:
       - "--leader-elect"
