@@ -1,0 +1,13 @@
+# Blocklist applied to all Pihole instances in the same namespace.
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Blocklist
+metadata:
+  name: ads
+  namespace: default
+spec:
+  enabled: true
+  sources:
+    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+    - https://raw.githubusercontent.com/PolishFiltersTeam/KADhosts/master/KADhosts.txt
+  description: "Ad and tracker blocking"
+  syncInterval: 1440  # re-sync every 24 hours

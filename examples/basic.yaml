@@ -1,0 +1,11 @@
+# Minimal Pi-hole deployment with all defaults.
+# The operator auto-generates the admin password.
+# Retrieve it with:
+#   kubectl get secret my-pihole-admin -o jsonpath='{.data.password}' | base64 -d
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Pihole
+metadata:
+  name: my-pihole
+  namespace: default
+spec:
+  size: 1

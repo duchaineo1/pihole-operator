@@ -366,3 +366,218 @@ func TestUpdateBlocklist_APIError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// --- DNS Host tests ---
+
+func TestListDNSHosts_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/api/config/dns/hosts" {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		resp := `{"config":{"dns":{"hosts":["192.168.1.1 foo.local","10.0.0.1 bar.local"]}}}`
+		w.Write([]byte(resp))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	hosts, err := client.ListDNSHosts(context.Background())
+	if err != nil {
+		t.Fatalf("ListDNSHosts() error: %v", err)
+	}
+	if len(hosts) != 2 {
+		t.Errorf("got %d hosts, want 2", len(hosts))
+	}
+	if hosts[0] != "192.168.1.1 foo.local" {
+		t.Errorf("hosts[0] = %q", hosts[0])
+	}
+}
+
+func TestListDNSHosts_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("forbidden"))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	_, err := client.ListDNSHosts(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAddDNSHost_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("expected PUT, got %s", r.Method)
+		}
+		if !strings.HasPrefix(r.URL.Path, "/api/config/dns/hosts/") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Header.Get("X-FTL-SID") != "pre-auth-sid" {
+			t.Errorf("missing or wrong SID header")
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	err := client.AddDNSHost(context.Background(), "192.168.1.1 test.local")
+	if err != nil {
+		t.Fatalf("AddDNSHost() error: %v", err)
+	}
+}
+
+func TestAddDNSHost_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("error"))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	err := client.AddDNSHost(context.Background(), "192.168.1.1 test.local")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDeleteDNSHost_Success(t *testing.T) {
+	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "DELETE" {
+					t.Errorf("expected DELETE, got %s", r.Method)
+				}
+				w.WriteHeader(statusCode)
+			}))
+			defer srv.Close()
+
+			client := newAuthenticatedClient(srv)
+			err := client.DeleteDNSHost(context.Background(), "192.168.1.1 test.local")
+			if err != nil {
+				t.Fatalf("DeleteDNSHost() error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDeleteDNSHost_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("not found"))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	err := client.DeleteDNSHost(context.Background(), "192.168.1.1 test.local")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+// --- DNS CNAME tests ---
+
+func TestListDNSCNAMEs_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/api/config/dns/cnameRecords" {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		resp := `{"config":{"dns":{"cnameRecords":["alias.local,target.local","foo.local,bar.local"]}}}`
+		w.Write([]byte(resp))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	cnames, err := client.ListDNSCNAMEs(context.Background())
+	if err != nil {
+		t.Fatalf("ListDNSCNAMEs() error: %v", err)
+	}
+	if len(cnames) != 2 {
+		t.Errorf("got %d cnames, want 2", len(cnames))
+	}
+	if cnames[0] != "alias.local,target.local" {
+		t.Errorf("cnames[0] = %q", cnames[0])
+	}
+}
+
+func TestListDNSCNAMEs_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("forbidden"))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	_, err := client.ListDNSCNAMEs(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAddDNSCNAME_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("expected PUT, got %s", r.Method)
+		}
+		if !strings.HasPrefix(r.URL.Path, "/api/config/dns/cnameRecords/") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	err := client.AddDNSCNAME(context.Background(), "alias.local,target.local")
+	if err != nil {
+		t.Fatalf("AddDNSCNAME() error: %v", err)
+	}
+}
+
+func TestAddDNSCNAME_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("error"))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	err := client.AddDNSCNAME(context.Background(), "alias.local,target.local")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDeleteDNSCNAME_Success(t *testing.T) {
+	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "DELETE" {
+					t.Errorf("expected DELETE, got %s", r.Method)
+				}
+				w.WriteHeader(statusCode)
+			}))
+			defer srv.Close()
+
+			client := newAuthenticatedClient(srv)
+			err := client.DeleteDNSCNAME(context.Background(), "alias.local,target.local")
+			if err != nil {
+				t.Fatalf("DeleteDNSCNAME() error: %v", err)
+			}
+		})
+	}
+}
+
+func TestDeleteDNSCNAME_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("not found"))
+	}))
+	defer srv.Close()
+
+	client := newAuthenticatedClient(srv)
+	err := client.DeleteDNSCNAME(context.Background(), "alias.local,target.local")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}

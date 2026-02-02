@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"time"
 )
 
@@ -218,6 +219,234 @@ func (c *PiholeAPIClient) DeleteBlocklist(ctx context.Context, listID int) error
 	}
 
 	return nil
+}
+
+// DNSHostsResponse represents the response from /api/config/dns/hosts
+type DNSHostsResponse struct {
+	Config struct {
+		DNS struct {
+			Hosts []string `json:"hosts"`
+		} `json:"dns"`
+	} `json:"config"`
+}
+
+// DNSCNAMEResponse represents the response from /api/config/dns/cnameRecords
+type DNSCNAMEResponse struct {
+	Config struct {
+		DNS struct {
+			CNAMERecords []string `json:"cnameRecords"`
+		} `json:"dns"`
+	} `json:"config"`
+}
+
+// ListDNSHosts retrieves all DNS host records from Pi-hole
+func (c *PiholeAPIClient) ListDNSHosts(ctx context.Context) ([]string, error) {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/config/dns/hosts", c.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var hostsResp DNSHostsResponse
+	if err := json.Unmarshal(body, &hostsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return hostsResp.Config.DNS.Hosts, nil
+}
+
+// AddDNSHost adds a DNS host record (A/AAAA) to Pi-hole
+func (c *PiholeAPIClient) AddDNSHost(ctx context.Context, entry string) error {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/config/dns/hosts/%s", c.BaseURL, urlEncode(entry))
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to call API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// DeleteDNSHost removes a DNS host record (A/AAAA) from Pi-hole
+func (c *PiholeAPIClient) DeleteDNSHost(ctx context.Context, entry string) error {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/config/dns/hosts/%s", c.BaseURL, urlEncode(entry))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to call API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// ListDNSCNAMEs retrieves all DNS CNAME records from Pi-hole
+func (c *PiholeAPIClient) ListDNSCNAMEs(ctx context.Context) ([]string, error) {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/config/dns/cnameRecords", c.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var cnameResp DNSCNAMEResponse
+	if err := json.Unmarshal(body, &cnameResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return cnameResp.Config.DNS.CNAMERecords, nil
+}
+
+// AddDNSCNAME adds a DNS CNAME record to Pi-hole
+func (c *PiholeAPIClient) AddDNSCNAME(ctx context.Context, entry string) error {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/config/dns/cnameRecords/%s", c.BaseURL, urlEncode(entry))
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to call API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// DeleteDNSCNAME removes a DNS CNAME record from Pi-hole
+func (c *PiholeAPIClient) DeleteDNSCNAME(ctx context.Context, entry string) error {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/config/dns/cnameRecords/%s", c.BaseURL, urlEncode(entry))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to call API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// urlEncode encodes a string for use in a URL path segment
+func urlEncode(s string) string {
+	// Use net/url PathEscape for proper encoding
+	return neturl.PathEscape(s)
 }
 
 // UpdateBlocklist updates a blocklist in Pi-hole

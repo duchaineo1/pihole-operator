@@ -1,0 +1,16 @@
+# Pi-hole with all options configured.
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Pihole
+metadata:
+  name: home-pihole
+  namespace: default
+spec:
+  size: 1
+  adminPassword: "changeme"
+  timezone: "America/New_York"
+  storageSize: "5Gi"
+  storageClass: "standard"
+  dnsServiceType: "LoadBalancer"
+  dnsLoadBalancerIP: "192.168.1.53"
+  webServiceType: "ClusterIP"
+  image: "docker.io/pihole/pihole:2025.11.0"

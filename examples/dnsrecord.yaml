@@ -1,0 +1,19 @@
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: myhost-a-record
+spec:
+  hostname: myhost.home.local
+  recordType: A
+  ipAddress: "192.168.1.100"
+  description: "A record for myhost"
+---
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: myhost-cname-record
+spec:
+  hostname: alias.home.local
+  recordType: CNAME
+  cnameTarget: myhost.home.local
+  description: "CNAME alias pointing to myhost"
