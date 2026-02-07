@@ -353,6 +353,34 @@ var _ = Describe("Pihole Controller", func() {
 		})
 	})
 
+	Context("LoadBalancer DNS without static IP", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-lb-no-ip", cachev1alpha1.PiholeSpec{
+				DnsServiceType: "LoadBalancer",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should create a DNS LoadBalancer service without loadBalancerIP set", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-lb-no-ip-dns", Namespace: "default",
+			}, svc)).To(Succeed())
+
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
+			Expect(svc.Spec.LoadBalancerIP).To(BeEmpty())
+			Expect(svc.Spec.Ports).To(HaveLen(2))
+
+			portNames := []string{svc.Spec.Ports[0].Name, svc.Spec.Ports[1].Name}
+			Expect(portNames).To(ContainElements("dns-tcp", "dns-udp"))
+		})
+	})
+
 	Context("Custom image", func() {
 		var nn types.NamespacedName
 

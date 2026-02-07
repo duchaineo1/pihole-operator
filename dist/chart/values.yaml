@@ -6,7 +6,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/duchaineo1/pihole-operator
-      tag: v1.0.6
+      tag: v1.0.8
     imagePullPolicy: IfNotPresent
     args:
       - "--leader-elect"
@@ -77,3 +77,27 @@ certmanager:
 # [NETWORK POLICIES]: To enable NetworkPolicies set true
 networkPolicy:
   enable: false
+
+# [PIHOLE]: Optionally deploy a Pihole CR alongside the operator.
+# Set enable: true to create a Pihole instance as part of the Helm release.
+pihole:
+  enable: false
+  name: pihole
+  size: 1
+  # adminPassword: "changeme"          # Inline password (a random one is generated if omitted)
+  # adminPasswordSecretRef:            # Or reference an existing Secret
+  #   name: my-pihole-secret
+  #   key: password
+  timezone: "UTC"
+  storageSize: "1Gi"
+  # storageClass: ""                   # Omit to use the default StorageClass
+
+  # DNS service exposure.
+  # Use "LoadBalancer" to expose DNS externally (requires MetalLB or a cloud LB).
+  # Use "NodePort" to expose on a high port on every node.
+  # Use "ClusterIP" for cluster-internal only.
+  dnsServiceType: "LoadBalancer"
+  # dnsLoadBalancerIP: "192.168.1.53"  # Optional: pin to a specific IP
+
+  webServiceType: "ClusterIP"
+  # webLoadBalancerIP: ""

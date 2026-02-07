@@ -1,0 +1,22 @@
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Pihole
+metadata:
+  name: pihole-external-dns
+  namespace: default
+spec:
+  size: 1
+  adminPassword: "changeme"
+  timezone: "America/New_York"
+  storageSize: "2Gi"
+
+  # Expose DNS externally via LoadBalancer.
+  # Requires a LoadBalancer provider (e.g., MetalLB for bare-metal clusters).
+  dnsServiceType: "LoadBalancer"
+
+  # Optional: pin the DNS LoadBalancer to a specific IP.
+  # When using MetalLB, the IP must belong to an IPAddressPool.
+  # Omit to let the provider assign an IP automatically.
+  dnsLoadBalancerIP: "192.168.1.53"
+
+  # Keep the web UI internal.
+  webServiceType: "ClusterIP"

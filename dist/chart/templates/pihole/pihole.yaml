@@ -1,0 +1,41 @@
+{{- if .Values.pihole.enable }}
+apiVersion: cache.duchaine.dev/v1alpha1
+kind: Pihole
+metadata:
+  name: {{ .Values.pihole.name | default "pihole" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+spec:
+  size: {{ .Values.pihole.size | default 1 }}
+  {{- if .Values.pihole.adminPassword }}
+  adminPassword: {{ .Values.pihole.adminPassword | quote }}
+  {{- end }}
+  {{- if .Values.pihole.adminPasswordSecretRef }}
+  adminPasswordSecretRef:
+    name: {{ .Values.pihole.adminPasswordSecretRef.name }}
+    {{- if .Values.pihole.adminPasswordSecretRef.key }}
+    key: {{ .Values.pihole.adminPasswordSecretRef.key }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.pihole.timezone }}
+  timezone: {{ .Values.pihole.timezone | quote }}
+  {{- end }}
+  {{- if .Values.pihole.storageSize }}
+  storageSize: {{ .Values.pihole.storageSize | quote }}
+  {{- end }}
+  {{- if .Values.pihole.storageClass }}
+  storageClass: {{ .Values.pihole.storageClass | quote }}
+  {{- end }}
+  dnsServiceType: {{ .Values.pihole.dnsServiceType | default "NodePort" | quote }}
+  {{- if .Values.pihole.dnsLoadBalancerIP }}
+  dnsLoadBalancerIP: {{ .Values.pihole.dnsLoadBalancerIP | quote }}
+  {{- end }}
+  webServiceType: {{ .Values.pihole.webServiceType | default "ClusterIP" | quote }}
+  {{- if .Values.pihole.webLoadBalancerIP }}
+  webLoadBalancerIP: {{ .Values.pihole.webLoadBalancerIP | quote }}
+  {{- end }}
+  {{- if .Values.pihole.image }}
+  image: {{ .Values.pihole.image | quote }}
+  {{- end }}
+{{- end }}
