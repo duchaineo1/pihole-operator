@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	typeAvailableDNSRecord = "Available"
-	dnsRecordFinalizer     = "cache.duchaine.dev/dnsrecord-finalizer"
+	typeAvailableDNSRecord     = "Available"
+	dnsRecordFinalizer         = "cache.duchaine.dev/dnsrecord-finalizer"
 	lastAppliedEntryAnnotation = "cache.duchaine.dev/last-applied-entry"
 )
 
@@ -116,8 +116,29 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if !dnsRecord.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(dnsRecord, dnsRecordFinalizer) {
 			for _, pihole := range piholeList.Items {
-				if err := r.removeDNSRecordFromPihole(ctx, &pihole, dnsRecord, log); err != nil {
-					log.Error(err, "Failed to remove DNS record", "pihole", pihole.Name)
+				password, err := r.getPiholePassword(ctx, &pihole)
+				if err != nil {
+					log.Error(err, "Failed to get password for removal", "pihole", pihole.Name)
+					continue
+				}
+
+				replicas := int32(1)
+				if pihole.Spec.Size != nil {
+					replicas = *pihole.Spec.Size
+				}
+
+				for i := int32(0); i < replicas; i++ {
+					baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
+					cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
+					if override, ok := r.BaseURLOverride[cacheKey]; ok {
+						baseURL = override
+					} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
+						baseURL = override
+					}
+
+					if err := r.removeDNSRecordFromPod(ctx, baseURL, password, cacheKey, dnsRecord, log); err != nil {
+						log.Error(err, "Failed to remove DNS record", "pihole", pihole.Name, "pod", i)
+					}
 				}
 			}
 			controllerutil.RemoveFinalizer(dnsRecord, dnsRecordFinalizer)
@@ -157,21 +178,64 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// If the entry changed, remove the old one first
 	if lastApplied != "" && lastApplied != currentEntry {
 		for _, pihole := range piholeList.Items {
-			if err := r.removeEntryFromPihole(ctx, &pihole, dnsRecord.Spec.RecordType, lastApplied, log); err != nil {
-				log.Error(err, "Failed to remove old DNS entry", "pihole", pihole.Name, "entry", lastApplied)
+			password, err := r.getPiholePassword(ctx, &pihole)
+			if err != nil {
+				log.Error(err, "Failed to get password for old entry removal", "pihole", pihole.Name)
+				continue
+			}
+
+			replicas := int32(1)
+			if pihole.Spec.Size != nil {
+				replicas = *pihole.Spec.Size
+			}
+
+			for i := int32(0); i < replicas; i++ {
+				baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
+				cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
+				if override, ok := r.BaseURLOverride[cacheKey]; ok {
+					baseURL = override
+				} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
+					baseURL = override
+				}
+
+				if err := r.removeEntryFromPod(ctx, baseURL, password, cacheKey, dnsRecord.Spec.RecordType, lastApplied, log); err != nil {
+					log.Error(err, "Failed to remove old DNS entry", "pihole", pihole.Name, "pod", i, "entry", lastApplied)
+				}
 			}
 		}
 	}
 
-	// Apply to all Piholes
+	// Apply to all Pihole pods
 	successCount := 0
 	var lastError error
 	for _, pihole := range piholeList.Items {
-		if err := r.applyDNSRecordToPihole(ctx, &pihole, dnsRecord, log); err != nil {
-			log.Error(err, "Failed to apply DNS record", "pihole", pihole.Name)
+		password, err := r.getPiholePassword(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to get password", "pihole", pihole.Name)
 			lastError = err
-		} else {
-			successCount++
+			continue
+		}
+
+		replicas := int32(1)
+		if pihole.Spec.Size != nil {
+			replicas = *pihole.Spec.Size
+		}
+
+		for i := int32(0); i < replicas; i++ {
+			baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
+			cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
+			if override, ok := r.BaseURLOverride[cacheKey]; ok {
+				baseURL = override
+			} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
+				baseURL = override
+			}
+
+			if err := r.applyDNSRecordToPod(ctx, baseURL, password, cacheKey, dnsRecord, log); err != nil {
+				log.Error(err, "Failed to apply DNS record", "pihole", pihole.Name, "pod", i)
+				lastError = err
+			} else {
+				successCount++
+			}
 		}
 	}
 
@@ -271,27 +335,24 @@ func (r *PiholeDNSRecordReconciler) getSID(ctx context.Context, baseURL, passwor
 	return sid, nil
 }
 
-// getPiholeConnection returns baseURL, SID for a given Pihole
-func (r *PiholeDNSRecordReconciler) getPiholeConnection(ctx context.Context, pihole *cachev1alpha1.Pihole, log logr.Logger) (string, string, error) {
-	serviceName := pihole.Name + "-web"
+// getPiholePassword retrieves the admin password for a Pihole instance.
+func (r *PiholeDNSRecordReconciler) getPiholePassword(ctx context.Context, pihole *cachev1alpha1.Pihole) (string, error) {
 	secretName := piholeAdminSecretName(pihole)
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: pihole.Namespace}, secret); err != nil {
-		return "", "", fmt.Errorf("failed to get secret: %w", err)
+		return "", fmt.Errorf("failed to get secret: %w", err)
 	}
 
 	password := string(secret.Data["password"])
 	if password == "" {
-		return "", "", fmt.Errorf("password not found in secret")
+		return "", fmt.Errorf("password not found in secret")
 	}
+	return password, nil
+}
 
-	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
-	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
-	if override, ok := r.BaseURLOverride[cacheKey]; ok {
-		baseURL = override
-	}
-
+// getPodConnection returns baseURL, SID for a given pod
+func (r *PiholeDNSRecordReconciler) getPodConnection(ctx context.Context, baseURL, password, cacheKey string, log logr.Logger) (string, string, error) {
 	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get SID: %w", err)
@@ -300,9 +361,9 @@ func (r *PiholeDNSRecordReconciler) getPiholeConnection(ctx context.Context, pih
 	return baseURL, sid, nil
 }
 
-// applyDNSRecordToPihole applies a DNS record to a single Pi-hole instance
-func (r *PiholeDNSRecordReconciler) applyDNSRecordToPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
-	baseURL, sid, err := r.getPiholeConnection(ctx, pihole, log)
+// applyDNSRecordToPod applies a DNS record to a single Pi-hole pod
+func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
+	baseURL, sid, err := r.getPodConnection(ctx, baseURL, password, cacheKey, log)
 	if err != nil {
 		return err
 	}
@@ -354,15 +415,15 @@ func (r *PiholeDNSRecordReconciler) applyDNSRecordToPihole(ctx context.Context, 
 	return fmt.Errorf("unsupported record type: %s", record.Spec.RecordType)
 }
 
-// removeDNSRecordFromPihole removes a DNS record from a single Pi-hole instance
-func (r *PiholeDNSRecordReconciler) removeDNSRecordFromPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
+// removeDNSRecordFromPod removes a DNS record from a single Pi-hole pod
+func (r *PiholeDNSRecordReconciler) removeDNSRecordFromPod(ctx context.Context, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
 	entry := r.buildEntry(record)
-	return r.removeEntryFromPihole(ctx, pihole, record.Spec.RecordType, entry, log)
+	return r.removeEntryFromPod(ctx, baseURL, password, cacheKey, record.Spec.RecordType, entry, log)
 }
 
-// removeEntryFromPihole removes a specific DNS entry from a Pi-hole instance
-func (r *PiholeDNSRecordReconciler) removeEntryFromPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, recordType, entry string, log logr.Logger) error {
-	baseURL, sid, err := r.getPiholeConnection(ctx, pihole, log)
+// removeEntryFromPod removes a specific DNS entry from a single Pi-hole pod
+func (r *PiholeDNSRecordReconciler) removeEntryFromPod(ctx context.Context, baseURL, password, cacheKey, recordType, entry string, log logr.Logger) error {
+	baseURL, sid, err := r.getPodConnection(ctx, baseURL, password, cacheKey, log)
 	if err != nil {
 		return err
 	}

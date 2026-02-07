@@ -84,7 +84,9 @@ spec:
                 type: string
               size:
                 default: 1
-                description: Size is the number of pihole instances (replicas)
+                description: |-
+                  Size defines the number of Pi-hole instances. Each instance gets its own
+                  persistent storage. Instances are kept in sync by the operator.
                 format: int32
                 type: integer
               storageClass:

@@ -145,9 +145,29 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if !blocklist.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(blocklist, blocklistFinalizer) {
 			for _, pihole := range piholeList.Items {
-				if err := r.removeBlocklistFromPihole(ctx, &pihole, blocklist, log); err != nil {
-					log.Error(err, "Failed to remove blocklist", "pihole", pihole.Name)
-					// Continue trying others
+				password, err := r.getPiholePassword(ctx, &pihole)
+				if err != nil {
+					log.Error(err, "Failed to get password for removal", "pihole", pihole.Name)
+					continue
+				}
+
+				replicas := int32(1)
+				if pihole.Spec.Size != nil {
+					replicas = *pihole.Spec.Size
+				}
+
+				for i := int32(0); i < replicas; i++ {
+					baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
+					cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
+					if override, ok := r.BaseURLOverride[cacheKey]; ok {
+						baseURL = override
+					} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
+						baseURL = override
+					}
+
+					if err := r.removeBlocklistFromPod(ctx, baseURL, password, cacheKey, blocklist, log); err != nil {
+						log.Error(err, "Failed to remove blocklist", "pihole", pihole.Name, "pod", i)
+					}
 				}
 			}
 			controllerutil.RemoveFinalizer(blocklist, blocklistFinalizer)
@@ -177,15 +197,37 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		_ = r.Status().Update(ctx, blocklist)
 	}
 
-	// Apply to all Piholes
+	// Apply to all Pihole pods
 	successCount := 0
 	var lastError error
 	for _, pihole := range piholeList.Items {
-		if err := r.applyBlocklistToPihole(ctx, &pihole, blocklist, log); err != nil {
-			log.Error(err, "Failed to apply blocklist", "pihole", pihole.Name)
+		password, err := r.getPiholePassword(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to get password", "pihole", pihole.Name)
 			lastError = err
-		} else {
-			successCount++
+			continue
+		}
+
+		replicas := int32(1)
+		if pihole.Spec.Size != nil {
+			replicas = *pihole.Spec.Size
+		}
+
+		for i := int32(0); i < replicas; i++ {
+			baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
+			cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
+			if override, ok := r.BaseURLOverride[cacheKey]; ok {
+				baseURL = override
+			} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
+				baseURL = override
+			}
+
+			if err := r.applyBlocklistToPod(ctx, baseURL, password, cacheKey, blocklist, log); err != nil {
+				log.Error(err, "Failed to apply blocklist", "pihole", pihole.Name, "pod", i)
+				lastError = err
+			} else {
+				successCount++
+			}
 		}
 	}
 
@@ -295,7 +337,6 @@ func (r *BlocklistReconciler) getSID(ctx context.Context, baseURL, password, cac
 	return sid, nil
 }
 
-// applyBlocklistToPihole applies blocklist via Pi-hole API
 // piholeAdminSecretName returns the admin secret name from status, falling back to the default name.
 func piholeAdminSecretName(pihole *cachev1alpha1.Pihole) string {
 	if pihole.Status.AdminPasswordSecret != "" {
@@ -304,27 +345,23 @@ func piholeAdminSecretName(pihole *cachev1alpha1.Pihole) string {
 	return pihole.Name + "-admin"
 }
 
-func (r *BlocklistReconciler) applyBlocklistToPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
-	// Get service and secret
-	serviceName := pihole.Name + "-web"
+// getPiholePassword retrieves the admin password for a Pihole instance.
+func (r *BlocklistReconciler) getPiholePassword(ctx context.Context, pihole *cachev1alpha1.Pihole) (string, error) {
 	secretName := piholeAdminSecretName(pihole)
 
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: pihole.Namespace}, secret); err != nil {
-		return fmt.Errorf("failed to get secret: %w", err)
+		return "", fmt.Errorf("failed to get secret: %w", err)
 	}
 
 	password := string(secret.Data["password"])
 	if password == "" {
-		return fmt.Errorf("password not found in secret")
+		return "", fmt.Errorf("password not found in secret")
 	}
+	return password, nil
+}
 
-	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
-	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
-	if override, ok := r.BaseURLOverride[cacheKey]; ok {
-		baseURL = override
-	}
-
+func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	// Get session
 	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
 	if err != nil {
@@ -544,23 +581,8 @@ func (r *BlocklistReconciler) reloadGravity(ctx context.Context, baseURL, sid st
 	return nil
 }
 
-// removeBlocklistFromPihole removes blocklist sources from Pi-hole
-func (r *BlocklistReconciler) removeBlocklistFromPihole(ctx context.Context, pihole *cachev1alpha1.Pihole, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
-	serviceName := pihole.Name + "-web"
-	secretName := piholeAdminSecretName(pihole)
-
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: pihole.Namespace}, secret); err != nil {
-		return fmt.Errorf("failed to get secret: %w", err)
-	}
-
-	password := string(secret.Data["password"])
-	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
-	baseURL := fmt.Sprintf("https://%s.%s.svc.cluster.local", serviceName, pihole.Namespace)
-	if override, ok := r.BaseURLOverride[cacheKey]; ok {
-		baseURL = override
-	}
-
+// removeBlocklistFromPod removes blocklist sources from a single Pi-hole pod
+func (r *BlocklistReconciler) removeBlocklistFromPod(ctx context.Context, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
 	if err != nil {
 		return fmt.Errorf("failed to get SID: %w", err)

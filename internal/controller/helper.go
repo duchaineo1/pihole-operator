@@ -443,6 +443,17 @@ func (c *PiholeAPIClient) DeleteDNSCNAME(ctx context.Context, entry string) erro
 	return nil
 }
 
+// PodBaseURL returns the HTTPS base URL for an individual StatefulSet pod.
+func PodBaseURL(piholeName, namespace string, ordinal int32) string {
+	return fmt.Sprintf("https://%s-%d.%s-headless.%s.svc.cluster.local",
+		piholeName, ordinal, piholeName, namespace)
+}
+
+// PodCacheKey returns a cache key scoped to an individual StatefulSet pod.
+func PodCacheKey(namespace, piholeName string, ordinal int32) string {
+	return fmt.Sprintf("%s/%s-%d", namespace, piholeName, ordinal)
+}
+
 // urlEncode encodes a string for use in a URL path segment
 func urlEncode(s string) string {
 	// Use net/url PathEscape for proper encoding

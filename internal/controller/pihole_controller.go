@@ -52,12 +52,10 @@ type PiholeReconciler struct {
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/finalizers,verbs=update
@@ -67,16 +65,6 @@ type PiholeReconciler struct {
 // +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes/finalizers,verbs=update
-// +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
-// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 
 func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -113,25 +101,25 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	if err := r.reconcilePVC(ctx, pihole, log); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	if err := r.reconcileService(ctx, pihole, log); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	found := &appsv1.Deployment{}
+	if err := r.reconcileHeadlessService(ctx, pihole, log); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	found := &appsv1.StatefulSet{}
 	err = r.Get(ctx, types.NamespacedName{Name: pihole.Name, Namespace: pihole.Namespace}, found)
 	if err != nil && apierrors.IsNotFound(err) {
-		dep, err := r.deploymentForPihole(pihole)
+		sts, err := r.statefulSetForPihole(pihole)
 		if err != nil {
-			log.Error(err, "Failed to define new Deployment resource for pihole")
+			log.Error(err, "Failed to define new StatefulSet resource for pihole")
 			meta.SetStatusCondition(&pihole.Status.Conditions, metav1.Condition{
 				Type:    typeAvailablePihole,
 				Status:  metav1.ConditionFalse,
 				Reason:  "Reconciling",
-				Message: fmt.Sprintf("Failed to create Deployment for the custom resource (%s): (%s)", pihole.Name, err),
+				Message: fmt.Sprintf("Failed to create StatefulSet for the custom resource (%s): (%s)", pihole.Name, err),
 			})
 			if err := r.Status().Update(ctx, pihole); err != nil {
 				log.Error(err, "Failed to update pihole status")
@@ -140,11 +128,11 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 
-		log.Info("Creating a new Deployment",
-			"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-		if err = r.Create(ctx, dep); err != nil {
-			log.Error(err, "Failed to create new Deployment",
-				"Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+		log.Info("Creating a new StatefulSet",
+			"StatefulSet.Namespace", sts.Namespace, "StatefulSet.Name", sts.Name)
+		if err = r.Create(ctx, sts); err != nil {
+			log.Error(err, "Failed to create new StatefulSet",
+				"StatefulSet.Namespace", sts.Namespace, "StatefulSet.Name", sts.Name)
 			return ctrl.Result{}, err
 		}
 
@@ -157,7 +145,7 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	} else if err != nil {
-		log.Error(err, "Failed to get Deployment")
+		log.Error(err, "Failed to get StatefulSet")
 		return ctrl.Result{}, err
 	}
 
@@ -183,8 +171,8 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	if needsUpdate {
 		if err = r.Update(ctx, found); err != nil {
-			log.Error(err, "Failed to update Deployment",
-				"Deployment.Namespace", found.Namespace, "Deployment.Name", found.Name)
+			log.Error(err, "Failed to update StatefulSet",
+				"StatefulSet.Namespace", found.Namespace, "StatefulSet.Name", found.Name)
 
 			if err := r.Get(ctx, req.NamespacedName, pihole); err != nil {
 				log.Error(err, "Failed to re-fetch pihole")
@@ -195,7 +183,7 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				Type:    typeAvailablePihole,
 				Status:  metav1.ConditionFalse,
 				Reason:  "Resizing",
-				Message: fmt.Sprintf("Failed to update the deployment for the custom resource (%s): (%s)", pihole.Name, err),
+				Message: fmt.Sprintf("Failed to update the StatefulSet for the custom resource (%s): (%s)", pihole.Name, err),
 			})
 			if err := r.Status().Update(ctx, pihole); err != nil {
 				log.Error(err, "Failed to update pihole status")
@@ -214,7 +202,7 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		Type:    typeAvailablePihole,
 		Status:  metav1.ConditionTrue,
 		Reason:  "Reconciling",
-		Message: fmt.Sprintf("Deployment for custom resource (%s) with %d replicas created successfully", pihole.Name, desiredReplicas),
+		Message: fmt.Sprintf("StatefulSet for custom resource (%s) with %d replicas created successfully", pihole.Name, desiredReplicas),
 	})
 
 	if err := r.Status().Update(ctx, pihole); err != nil {
@@ -277,31 +265,6 @@ func (r *PiholeReconciler) reconcileSecret(ctx context.Context, pihole *piholev1
 	return nil
 }
 
-func (r *PiholeReconciler) reconcilePVC(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
-	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{Name: pihole.Name + "-data", Namespace: pihole.Namespace}, pvc)
-
-	if err != nil && apierrors.IsNotFound(err) {
-		pvc, err := r.pvcForPihole(pihole)
-		if err != nil {
-			log.Error(err, "Failed to define new PVC resource for pihole")
-			return err
-		}
-
-		log.Info("Creating a new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
-		if err = r.Create(ctx, pvc); err != nil {
-			log.Error(err, "Failed to create new PVC", "PVC.Namespace", pvc.Namespace, "PVC.Name", pvc.Name)
-			return err
-		}
-		return nil
-	} else if err != nil {
-		log.Error(err, "Failed to get PVC")
-		return err
-	}
-
-	return nil
-}
-
 func (r *PiholeReconciler) reconcileService(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
 	if err := r.reconcileSingleService(ctx, pihole, log, "dns"); err != nil {
 		return err
@@ -339,8 +302,84 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 	return nil
 }
 
-func (r *PiholeReconciler) deploymentForPihole(
-	pihole *piholev1alpha1.Pihole) (*appsv1.Deployment, error) {
+func (r *PiholeReconciler) reconcileHeadlessService(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
+	serviceName := pihole.Name + "-headless"
+	service := &corev1.Service{}
+	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: pihole.Namespace}, service)
+
+	if err != nil && apierrors.IsNotFound(err) {
+		svc, err := r.headlessServiceForPihole(pihole)
+		if err != nil {
+			log.Error(err, "Failed to define new headless Service resource for pihole")
+			return err
+		}
+
+		log.Info("Creating a new headless Service", "Service.Namespace", svc.Namespace, "Service.Name", svc.Name)
+		if err = r.Create(ctx, svc); err != nil {
+			log.Error(err, "Failed to create new headless Service", "Service.Namespace", svc.Namespace, "Service.Name", svc.Name)
+			return err
+		}
+		return nil
+	} else if err != nil {
+		log.Error(err, "Failed to get headless Service")
+		return err
+	}
+	return nil
+}
+
+func (r *PiholeReconciler) headlessServiceForPihole(pihole *piholev1alpha1.Pihole) (*corev1.Service, error) {
+	labels := map[string]string{
+		"app.kubernetes.io/name":       "pihole",
+		"app.kubernetes.io/instance":   pihole.Name,
+		"app.kubernetes.io/managed-by": "pihole-operator",
+	}
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pihole.Name + "-headless",
+			Namespace: pihole.Namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector:  labels,
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "dns-tcp",
+					Protocol:   corev1.ProtocolTCP,
+					Port:       53,
+					TargetPort: intstr.FromString("dns-tcp"),
+				},
+				{
+					Name:       "dns-udp",
+					Protocol:   corev1.ProtocolUDP,
+					Port:       53,
+					TargetPort: intstr.FromString("dns-udp"),
+				},
+				{
+					Name:       "http",
+					Protocol:   corev1.ProtocolTCP,
+					Port:       80,
+					TargetPort: intstr.FromString("http"),
+				},
+				{
+					Name:       "https",
+					Protocol:   corev1.ProtocolTCP,
+					Port:       443,
+					TargetPort: intstr.FromString("https"),
+				},
+			},
+		},
+	}
+
+	if err := ctrl.SetControllerReference(pihole, svc, r.Scheme); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+func (r *PiholeReconciler) statefulSetForPihole(
+	pihole *piholev1alpha1.Pihole) (*appsv1.StatefulSet, error) {
 	image := "docker.io/pihole/pihole:2025.11.0"
 
 	replicas := int32(1)
@@ -354,17 +393,43 @@ func (r *PiholeReconciler) deploymentForPihole(
 		"app.kubernetes.io/managed-by": "pihole-operator",
 	}
 
-	dep := &appsv1.Deployment{
+	storageSize := "1Gi"
+	if pihole.Spec.StorageSize != "" {
+		storageSize = pihole.Spec.StorageSize
+	}
+
+	vct := corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "etc-pihole",
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{
+				corev1.ReadWriteOnce,
+			},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(storageSize),
+				},
+			},
+		},
+	}
+	if pihole.Spec.StorageClass != "" {
+		vct.Spec.StorageClassName = &pihole.Spec.StorageClass
+	}
+
+	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pihole.Name,
 			Namespace: pihole.Namespace,
 			Labels:    labels,
 		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    &replicas,
+			ServiceName: pihole.Name + "-headless",
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{vct},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -470,25 +535,15 @@ func (r *PiholeReconciler) deploymentForPihole(
 							FailureThreshold:    3,
 						},
 					}},
-					Volumes: []corev1.Volume{
-						{
-							Name: "etc-pihole",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: pihole.Name + "-data",
-								},
-							},
-						},
-					},
 				},
 			},
 		},
 	}
 
-	if err := ctrl.SetControllerReference(pihole, dep, r.Scheme); err != nil {
+	if err := ctrl.SetControllerReference(pihole, sts, r.Scheme); err != nil {
 		return nil, err
 	}
-	return dep, nil
+	return sts, nil
 }
 
 func getEnvOrDefault(value, defaultValue string) string {
@@ -528,47 +583,6 @@ func (r *PiholeReconciler) secretForPihole(
 		return nil, err
 	}
 	return secret, nil
-}
-
-func (r *PiholeReconciler) pvcForPihole(
-	pihole *piholev1alpha1.Pihole) (*corev1.PersistentVolumeClaim, error) {
-
-	labels := map[string]string{
-		"app.kubernetes.io/name":       "pihole",
-		"app.kubernetes.io/instance":   pihole.Name,
-		"app.kubernetes.io/managed-by": "pihole-operator",
-	}
-
-	storageSize := "1Gi"
-	if pihole.Spec.StorageSize != "" {
-		storageSize = pihole.Spec.StorageSize
-	}
-
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pihole.Name + "-data",
-			Namespace: pihole.Namespace,
-			Labels:    labels,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(storageSize),
-				},
-			},
-		},
-	}
-	if pihole.Spec.StorageClass != "" {
-		pvc.Spec.StorageClassName = &pihole.Spec.StorageClass
-	}
-
-	if err := ctrl.SetControllerReference(pihole, pvc, r.Scheme); err != nil {
-		return nil, err
-	}
-	return pvc, nil
 }
 
 func (r *PiholeReconciler) serviceForPihole(
@@ -675,9 +689,8 @@ func generateRandomPassword(length int) string {
 func (r *PiholeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&piholev1alpha1.Pihole{}).
-		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
-		Owns(&corev1.PersistentVolumeClaim{}).
 		Complete(r)
 }

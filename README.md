@@ -7,7 +7,7 @@ A Kubernetes operator to declaratively deploy and configure Pi-hole instances.
 - [x] Deploy Pi-hole with a single custom resource
 - [x] Manage blocklists declaratively
 - [ ] Whitelist management
-- [ ] DNS record management
+- [x] DNS record management
 
 ## Installation
 

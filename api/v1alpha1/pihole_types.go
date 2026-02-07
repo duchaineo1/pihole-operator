@@ -33,7 +33,8 @@ type SecretKeyRef struct {
 
 // PiholeSpec defines the desired state of Pihole
 type PiholeSpec struct {
-	// Size is the number of pihole instances (replicas)
+	// Size defines the number of Pi-hole instances. Each instance gets its own
+	// persistent storage. Instances are kept in sync by the operator.
 	// +optional
 	// +kubebuilder:default=1
 	Size *int32 `json:"size,omitempty"`

@@ -92,20 +92,6 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(len(secret.Data["password"])).To(Equal(16))
 		})
 
-		It("should create a PVC with default 1Gi storage", func() {
-			_, err := doReconcile(nn)
-			Expect(err).NotTo(HaveOccurred())
-
-			pvc := &corev1.PersistentVolumeClaim{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: "test-default-data", Namespace: "default",
-			}, pvc)).To(Succeed())
-
-			qty := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-			Expect(qty.Cmp(resource.MustParse("1Gi"))).To(Equal(0))
-			Expect(pvc.Spec.AccessModes).To(ContainElement(corev1.ReadWriteOnce))
-		})
-
 		It("should create a DNS service with NodePort type", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
@@ -132,17 +118,31 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(svc.Spec.Ports).To(HaveLen(2))
 		})
 
-		It("should create a Deployment with correct defaults", func() {
+		It("should create a headless Service with ClusterIP None", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-default-headless", Namespace: "default",
+			}, svc)).To(Succeed())
 
-			Expect(*dep.Spec.Replicas).To(Equal(int32(1)))
-			Expect(dep.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+			Expect(svc.Spec.Ports).To(HaveLen(4))
+		})
 
-			container := dep.Spec.Template.Spec.Containers[0]
+		It("should create a StatefulSet with correct defaults", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
+			Expect(sts.Spec.ServiceName).To(Equal("test-default-headless"))
+			Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(1))
+
+			container := sts.Spec.Template.Spec.Containers[0]
 			Expect(container.Image).To(Equal("docker.io/pihole/pihole:2025.11.0"))
 			Expect(container.Name).To(Equal("pihole"))
 
@@ -160,6 +160,14 @@ var _ = Describe("Pihole Controller", func() {
 			// Check volume mounts
 			Expect(container.VolumeMounts).To(HaveLen(1))
 			Expect(container.VolumeMounts[0].MountPath).To(Equal("/etc/pihole"))
+
+			// Check VolumeClaimTemplates instead of standalone PVC
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			vct := sts.Spec.VolumeClaimTemplates[0]
+			Expect(vct.Name).To(Equal("etc-pihole"))
+			qty := vct.Spec.Resources.Requests[corev1.ResourceStorage]
+			Expect(qty.Cmp(resource.MustParse("1Gi"))).To(Equal(0))
+			Expect(vct.Spec.AccessModes).To(ContainElement(corev1.ReadWriteOnce))
 		})
 
 		It("should set owner references on all created resources", func() {
@@ -179,10 +187,6 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nn.Name + "-admin", Namespace: "default"}, secret)).To(Succeed())
 			checkOwnerRef(secret.ObjectMeta)
 
-			pvc := &corev1.PersistentVolumeClaim{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nn.Name + "-data", Namespace: "default"}, pvc)).To(Succeed())
-			checkOwnerRef(pvc.ObjectMeta)
-
 			dnsSvc := &corev1.Service{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nn.Name + "-dns", Namespace: "default"}, dnsSvc)).To(Succeed())
 			checkOwnerRef(dnsSvc.ObjectMeta)
@@ -191,15 +195,19 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nn.Name + "-web", Namespace: "default"}, webSvc)).To(Succeed())
 			checkOwnerRef(webSvc.ObjectMeta)
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
-			checkOwnerRef(dep.ObjectMeta)
+			headlessSvc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nn.Name + "-headless", Namespace: "default"}, headlessSvc)).To(Succeed())
+			checkOwnerRef(headlessSvc.ObjectMeta)
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			checkOwnerRef(sts.ObjectMeta)
 		})
 
 	})
 
 	// Use a dedicated Context with a unique name so envtest leftover
-	// resources from other tests don't interfere with the deployment
+	// resources from other tests don't interfere with the StatefulSet
 	// creation branch (which sets AdminPasswordSecret/ServiceName).
 	Context("Status fields", func() {
 		var nn types.NamespacedName
@@ -210,11 +218,11 @@ var _ = Describe("Pihole Controller", func() {
 		AfterEach(func() { deletePihole(nn) })
 
 		It("should set status conditions and fields after reconcile", func() {
-			// First reconcile creates all resources including deployment
+			// First reconcile creates all resources including StatefulSet
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second reconcile finds deployment, sets Available=True
+			// Second reconcile finds StatefulSet, sets Available=True
 			_, err = doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -289,19 +297,19 @@ var _ = Describe("Pihole Controller", func() {
 		})
 		AfterEach(func() { deletePihole(nn) })
 
-		It("should create PVC with custom size and storage class", func() {
+		It("should create StatefulSet with custom size and storage class in VolumeClaimTemplates", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			pvc := &corev1.PersistentVolumeClaim{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: "test-storage-data", Namespace: "default",
-			}, pvc)).To(Succeed())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 
-			qty := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			vct := sts.Spec.VolumeClaimTemplates[0]
+			qty := vct.Spec.Resources.Requests[corev1.ResourceStorage]
 			Expect(qty.Cmp(resource.MustParse("5Gi"))).To(Equal(0))
-			Expect(pvc.Spec.StorageClassName).NotTo(BeNil())
-			Expect(*pvc.Spec.StorageClassName).To(Equal("fast-ssd"))
+			Expect(vct.Spec.StorageClassName).NotTo(BeNil())
+			Expect(*vct.Spec.StorageClassName).To(Equal("fast-ssd"))
 		})
 	})
 
@@ -355,8 +363,8 @@ var _ = Describe("Pihole Controller", func() {
 		})
 		AfterEach(func() { deletePihole(nn) })
 
-		It("should use custom image in the Deployment", func() {
-			// First reconcile creates deployment with default image
+		It("should use custom image in the StatefulSet", func() {
+			// First reconcile creates StatefulSet with default image
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -365,9 +373,9 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Requeue).To(BeTrue())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
-			Expect(dep.Spec.Template.Spec.Containers[0].Image).To(Equal("docker.io/pihole/pihole:2024.01.0"))
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("docker.io/pihole/pihole:2024.01.0"))
 		})
 	})
 
@@ -381,14 +389,14 @@ var _ = Describe("Pihole Controller", func() {
 		})
 		AfterEach(func() { deletePihole(nn) })
 
-		It("should update deployment replicas when spec.size changes", func() {
+		It("should update StatefulSet replicas when spec.size changes", func() {
 			// Initial reconcile
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
-			Expect(*dep.Spec.Replicas).To(Equal(int32(1)))
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
 
 			// Update size
 			pihole := &cachev1alpha1.Pihole{}
@@ -401,8 +409,8 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Requeue).To(BeTrue()) // requeue after update
 
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
-			Expect(*dep.Spec.Replicas).To(Equal(int32(3)))
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(3)))
 		})
 	})
 
@@ -416,7 +424,7 @@ var _ = Describe("Pihole Controller", func() {
 		})
 	})
 
-	Context("Deployment security context", func() {
+	Context("StatefulSet security context", func() {
 		var nn types.NamespacedName
 
 		BeforeEach(func() {
@@ -428,14 +436,14 @@ var _ = Describe("Pihole Controller", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 
-			podSec := dep.Spec.Template.Spec.SecurityContext
+			podSec := sts.Spec.Template.Spec.SecurityContext
 			Expect(podSec).NotTo(BeNil())
 			Expect(*podSec.RunAsUser).To(Equal(int64(0)))
 
-			container := dep.Spec.Template.Spec.Containers[0]
+			container := sts.Spec.Template.Spec.Containers[0]
 			Expect(container.SecurityContext).NotTo(BeNil())
 			Expect(container.SecurityContext.Capabilities).NotTo(BeNil())
 			Expect(container.SecurityContext.Capabilities.Add).To(ContainElement(corev1.Capability("NET_BIND_SERVICE")))
@@ -453,15 +461,15 @@ var _ = Describe("Pihole Controller", func() {
 		})
 		AfterEach(func() { deletePihole(nn) })
 
-		It("should set the TZ env var in the Deployment", func() {
+		It("should set the TZ env var in the StatefulSet", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 
 			var tzValue string
-			for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
 				if e.Name == "TZ" {
 					tzValue = e.Value
 					break
@@ -490,10 +498,10 @@ var _ = Describe("Pihole Controller", func() {
 				"app.kubernetes.io/managed-by": "pihole-operator",
 			}
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 			for k, v := range expectedLabels {
-				Expect(dep.Labels).To(HaveKeyWithValue(k, v))
+				Expect(sts.Labels).To(HaveKeyWithValue(k, v))
 			}
 
 			secret := &corev1.Secret{}
@@ -544,15 +552,15 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 
-		It("should reference the existing secret in the deployment", func() {
+		It("should reference the existing secret in the StatefulSet", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 
 			var envVar corev1.EnvVar
-			for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
 				if e.Name == "FTLCONF_webserver_api_password" {
 					envVar = e
 					break
@@ -564,7 +572,7 @@ var _ = Describe("Pihole Controller", func() {
 		})
 
 		It("should set status.adminPasswordSecret to the referenced secret name", func() {
-			// First reconcile creates deployment and sets status
+			// First reconcile creates StatefulSet and sets status
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -606,15 +614,15 @@ var _ = Describe("Pihole Controller", func() {
 			}
 		})
 
-		It("should use the custom key in the deployment env var", func() {
+		It("should use the custom key in the StatefulSet env var", func() {
 			_, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 
-			dep := &appsv1.Deployment{}
-			Expect(k8sClient.Get(ctx, nn, dep)).To(Succeed())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 
 			var envVar corev1.EnvVar
-			for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
 				if e.Name == "FTLCONF_webserver_api_password" {
 					envVar = e
 					break

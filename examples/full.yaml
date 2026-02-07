@@ -1,11 +1,13 @@
 # Pi-hole with all options configured.
+# size: 3 enables HA — each instance gets its own PVC and the operator
+# syncs blocklists and DNS records to every pod individually.
 apiVersion: cache.duchaine.dev/v1alpha1
 kind: Pihole
 metadata:
   name: home-pihole
   namespace: default
 spec:
-  size: 1
+  size: 3
   adminPassword: "changeme"
   timezone: "America/New_York"
   storageSize: "5Gi"
