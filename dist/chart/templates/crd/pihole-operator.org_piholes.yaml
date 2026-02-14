@@ -10,48 +10,20 @@ metadata:
     "helm.sh/resource-policy": keep
     {{- end }}
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: piholednsrecords.cache.duchaine.dev
+  name: piholes.pihole-operator.org
 spec:
-  group: cache.duchaine.dev
+  group: pihole-operator.org
   names:
-    kind: PiholeDNSRecord
-    listKind: PiholeDNSRecordList
-    plural: piholednsrecords
-    shortNames:
-    - dnsrec
-    singular: piholednsrecord
+    kind: Pihole
+    listKind: PiholeList
+    plural: piholes
+    singular: pihole
   scope: Namespaced
   versions:
-  - additionalPrinterColumns:
-    - description: DNS hostname
-      jsonPath: .spec.hostname
-      name: Hostname
-      type: string
-    - description: Record type
-      jsonPath: .spec.recordType
-      name: Type
-      type: string
-    - description: IP address
-      jsonPath: .spec.ipAddress
-      name: IP
-      priority: 1
-      type: string
-    - description: CNAME target
-      jsonPath: .spec.cnameTarget
-      name: CNAME
-      priority: 1
-      type: string
-    - description: Last sync time
-      jsonPath: .status.lastSyncTime
-      name: Last Sync
-      type: date
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1alpha1
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: PiholeDNSRecord is the Schema for the piholednsrecords API
+        description: Pihole is the Schema for the piholes API
         properties:
           apiVersion:
             description: |-
@@ -71,41 +43,88 @@ spec:
           metadata:
             type: object
           spec:
-            description: PiholeDNSRecordSpec defines the desired state of PiholeDNSRecord
+            description: spec defines the desired state of Pihole
             properties:
-              cnameTarget:
-                description: CNAMETarget is the target hostname for CNAME records
+              adminPassword:
+                description: |-
+                  AdminPassword is the password for the Pi-hole web interface
+                  If not provided, a random password will be generated
                 type: string
-              description:
-                description: Description is a human-readable description of this DNS
-                  record
-                maxLength: 200
+              adminPasswordSecretRef:
+                description: |-
+                  AdminPasswordSecretRef references an existing Secret containing the admin password.
+                  When set, the operator will not create a secret and will use this reference instead.
+                properties:
+                  key:
+                    default: password
+                    description: Key is the key within the secret to use
+                    type: string
+                  name:
+                    description: Name is the name of the secret
+                    type: string
+                required:
+                - name
+                type: object
+              dnsLoadBalancerIP:
+                description: DnsLoadBalancerIP is the IP to use for DNS LoadBalancer
+                  service type
                 type: string
-              hostname:
-                description: Hostname is the DNS name to create a record for
-                maxLength: 253
-                minLength: 1
-                type: string
-              ipAddress:
-                description: IPAddress is the IP address for A or AAAA records
-                type: string
-              recordType:
-                description: RecordType is the type of DNS record (A, AAAA, or CNAME)
+              dnsServiceType:
+                default: NodePort
+                description: DnsServiceType is the Kubernetes service type for DNS
+                  (ClusterIP, NodePort, LoadBalancer)
                 enum:
-                - A
-                - AAAA
-                - CNAME
+                - ClusterIP
+                - NodePort
+                - LoadBalancer
                 type: string
-            required:
-            - hostname
-            - recordType
+              image:
+                default: docker.io/pihole/pihole:2025.11.0
+                description: Image is the Pi-hole container image to use
+                type: string
+              size:
+                default: 1
+                description: |-
+                  Size defines the number of Pi-hole instances. Each instance gets its own
+                  persistent storage. Instances are kept in sync by the operator.
+                format: int32
+                type: integer
+              storageClass:
+                description: StorageClass is the storage class to use for the PVC
+                type: string
+              storageSize:
+                default: 1Gi
+                description: StorageSize is the size of the persistent volume for
+                  Pi-hole data
+                type: string
+              timezone:
+                default: UTC
+                description: Timezone for Pi-hole (e.g., "America/New_York", "Europe/London")
+                type: string
+              webLoadBalancerIP:
+                description: WebLoadBalancerIP is the IP to use for Web LoadBalancer
+                  service type
+                type: string
+              webServiceType:
+                default: ClusterIP
+                description: WebServiceType is the Kubernetes service type for Web
+                  UI (ClusterIP, NodePort, LoadBalancer)
+                enum:
+                - ClusterIP
+                - NodePort
+                - LoadBalancer
+                type: string
             type: object
           status:
-            description: PiholeDNSRecordStatus defines the observed state of PiholeDNSRecord
+            description: status defines the observed state of Pihole
             properties:
+              adminPasswordSecret:
+                description: AdminPasswordSecret is the name of the secret containing
+                  the admin password
+                type: string
               conditions:
                 description: Conditions represent the latest available observations
-                  of the PiholeDNSRecord's state
+                  of an object's state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -161,18 +180,20 @@ spec:
                   - type
                   type: object
                 type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
-              lastSyncTime:
-                description: LastSyncTime is the last time the DNS record was successfully
-                  synced
-                format: date-time
+              readyReplicas:
+                description: ReadyReplicas is the number of ready replicas
+                format: int32
+                type: integer
+              serviceName:
+                description: ServiceName is the name of the service created for this
+                  Pi-hole instance
                 type: string
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true
     subresources:
       status: {}
-{{- end }}
+{{- end -}}

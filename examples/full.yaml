@@ -1,7 +1,7 @@
 # Pi-hole with all options configured.
 # size: 3 enables HA — each instance gets its own PVC and the operator
 # syncs blocklists and DNS records to every pod individually.
-apiVersion: cache.duchaine.dev/v1alpha1
+apiVersion: pihole-operator.org/v1alpha1
 kind: Pihole
 metadata:
   name: home-pihole

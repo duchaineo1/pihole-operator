@@ -3,7 +3,7 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.9.0
-domain: duchaine.dev
+domain: pihole-operator.org
 layout:
 - go.kubebuilder.io/v4
 plugins:
@@ -15,8 +15,8 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: duchaine.dev
-  group: cache
+  domain: pihole-operator.org
+  group: ""
   kind: Pihole
   path: github.com/duchaineo1/pihole-operator/api/v1alpha1
   version: v1alpha1
@@ -24,8 +24,8 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: duchaine.dev
-  group: cache
+  domain: pihole-operator.org
+  group: ""
   kind: Blocklist
   path: github.com/duchaineo1/pihole-operator/api/v1alpha1
   version: v1alpha1
@@ -33,8 +33,8 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: duchaine.dev
-  group: cache
+  domain: pihole-operator.org
+  group: ""
   kind: PiholeDNSRecord
   path: github.com/duchaineo1/pihole-operator/api/v1alpha1
   version: v1alpha1

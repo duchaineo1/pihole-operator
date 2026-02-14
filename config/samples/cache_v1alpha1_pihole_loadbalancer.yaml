@@ -1,4 +1,4 @@
-apiVersion: cache.duchaine.dev/v1alpha1
+apiVersion: pihole-operator.org/v1alpha1
 kind: Pihole
 metadata:
   name: pihole-external-dns

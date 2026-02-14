@@ -26,7 +26,7 @@ popd
 Create a `Pihole` resource to deploy a Pi-hole instance:
 
 ```yaml
-apiVersion: cache.duchaine.dev/v1alpha1
+apiVersion: pihole-operator.org/v1alpha1
 kind: Pihole
 metadata:
   name: my-pihole
@@ -92,7 +92,7 @@ When `adminPasswordSecretRef` is set, `adminPassword` is ignored.
 Create a `Blocklist` resource to manage blocklists. It is automatically applied to all `Pihole` instances in the same namespace.
 
 ```yaml
-apiVersion: cache.duchaine.dev/v1alpha1
+apiVersion: pihole-operator.org/v1alpha1
 kind: Blocklist
 metadata:
   name: ads

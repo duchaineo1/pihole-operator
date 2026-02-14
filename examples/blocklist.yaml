@@ -1,5 +1,5 @@
 # Blocklist applied to all Pihole instances in the same namespace.
-apiVersion: cache.duchaine.dev/v1alpha1
+apiVersion: pihole-operator.org/v1alpha1
 kind: Blocklist
 metadata:
   name: ads

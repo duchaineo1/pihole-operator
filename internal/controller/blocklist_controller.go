@@ -28,7 +28,7 @@ import (
 
 const (
 	typeAvailableBlocklist = "Available"
-	blocklistFinalizer     = "cache.duchaine.dev/blocklist-finalizer"
+	blocklistFinalizer     = "pihole-operator.org/blocklist-finalizer"
 )
 
 // BlocklistReconciler reconciles a Blocklist object
@@ -102,10 +102,10 @@ func (r *BlocklistReconciler) Init() {
 	}
 }
 
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/finalizers,verbs=update
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists/finalizers,verbs=update
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
 

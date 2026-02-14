@@ -48,7 +48,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cache.duchaine.dev
+  - pihole-operator.org
   resources:
   - blocklists
   - piholednsrecords
@@ -62,7 +62,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cache.duchaine.dev
+  - pihole-operator.org
   resources:
   - blocklists/finalizers
   - piholednsrecords/finalizers
@@ -70,7 +70,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - cache.duchaine.dev
+  - pihole-operator.org
   resources:
   - blocklists/status
   - piholednsrecords/status

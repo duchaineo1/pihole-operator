@@ -25,8 +25,8 @@ import (
 
 const (
 	typeAvailableDNSRecord     = "Available"
-	dnsRecordFinalizer         = "cache.duchaine.dev/dnsrecord-finalizer"
-	lastAppliedEntryAnnotation = "cache.duchaine.dev/last-applied-entry"
+	dnsRecordFinalizer         = "pihole-operator.org/dnsrecord-finalizer"
+	lastAppliedEntryAnnotation = "pihole-operator.org/last-applied-entry"
 )
 
 // PiholeDNSRecordReconciler reconciles a PiholeDNSRecord object
@@ -61,10 +61,10 @@ func (r *PiholeDNSRecordReconciler) Init() {
 	}
 }
 
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords/finalizers,verbs=update
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords/finalizers,verbs=update
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
 

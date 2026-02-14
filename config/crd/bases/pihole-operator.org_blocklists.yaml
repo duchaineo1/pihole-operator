@@ -4,37 +4,31 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: piholednsrecords.cache.duchaine.dev
+  name: blocklists.pihole-operator.org
 spec:
-  group: cache.duchaine.dev
+  group: pihole-operator.org
   names:
-    kind: PiholeDNSRecord
-    listKind: PiholeDNSRecordList
-    plural: piholednsrecords
+    kind: Blocklist
+    listKind: BlocklistList
+    plural: blocklists
     shortNames:
-    - dnsrec
-    singular: piholednsrecord
+    - bl
+    singular: blocklist
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: DNS hostname
-      jsonPath: .spec.hostname
-      name: Hostname
-      type: string
-    - description: Record type
-      jsonPath: .spec.recordType
-      name: Type
-      type: string
-    - description: IP address
-      jsonPath: .spec.ipAddress
-      name: IP
-      priority: 1
-      type: string
-    - description: CNAME target
-      jsonPath: .spec.cnameTarget
-      name: CNAME
-      priority: 1
-      type: string
+    - description: Number of sources
+      jsonPath: .spec.sources[*]
+      name: Sources
+      type: integer
+    - description: Total blocked domains
+      jsonPath: .status.entriesCount
+      name: Entries
+      type: integer
+    - description: Whether blocklist is enabled
+      jsonPath: .spec.enabled
+      name: Enabled
+      type: boolean
     - description: Last sync time
       jsonPath: .status.lastSyncTime
       name: Last Sync
@@ -45,7 +39,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: PiholeDNSRecord is the Schema for the piholednsrecords API
+        description: Blocklist is the Schema for the blocklists API
         properties:
           apiVersion:
             description: |-
@@ -65,41 +59,43 @@ spec:
           metadata:
             type: object
           spec:
-            description: PiholeDNSRecordSpec defines the desired state of PiholeDNSRecord
+            description: BlocklistSpec defines the desired state of Blocklist
             properties:
-              cnameTarget:
-                description: CNAMETarget is the target hostname for CNAME records
-                type: string
               description:
-                description: Description is a human-readable description of this DNS
-                  record
+                description: Description is a human-readable description of what this
+                  blocklist blocks
                 maxLength: 200
                 type: string
-              hostname:
-                description: Hostname is the DNS name to create a record for
-                maxLength: 253
-                minLength: 1
-                type: string
-              ipAddress:
-                description: IPAddress is the IP address for A or AAAA records
-                type: string
-              recordType:
-                description: RecordType is the type of DNS record (A, AAAA, or CNAME)
-                enum:
-                - A
-                - AAAA
-                - CNAME
-                type: string
+              enabled:
+                default: true
+                description: Enabled determines if this blocklist should be active
+                type: boolean
+              sources:
+                description: |-
+                  Sources is a list of URLs pointing to blocklist files
+                  Each URL should return a hosts file format or domain list
+                items:
+                  type: string
+                maxItems: 100
+                minItems: 1
+                type: array
+              syncInterval:
+                default: 1440
+                description: SyncInterval defines how often to refresh the blocklist
+                  (in minutes)
+                format: int32
+                maximum: 10080
+                minimum: 60
+                type: integer
             required:
-            - hostname
-            - recordType
+            - sources
             type: object
           status:
-            description: PiholeDNSRecordStatus defines the observed state of PiholeDNSRecord
+            description: BlocklistStatus defines the observed state of Blocklist
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the PiholeDNSRecord's state
+                  of the Blocklist's state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -158,11 +154,50 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              entriesCount:
+                description: EntriesCount is the total number of blocked domains in
+                  this list
+                format: int32
+                type: integer
               lastSyncTime:
-                description: LastSyncTime is the last time the DNS record was successfully
+                description: LastSyncTime is the last time the blocklist was successfully
                   synced
                 format: date-time
                 type: string
+              sourcesStatus:
+                description: SourcesStatus contains the status of each source URL
+                items:
+                  description: SourceStatus represents the status of a single blocklist
+                    source
+                  properties:
+                    entriesCount:
+                      description: EntriesCount is the number of entries from this
+                        source
+                      format: int32
+                      type: integer
+                    lastError:
+                      description: LastError contains the error message if fetch failed
+                      type: string
+                    lastFetchTime:
+                      description: LastFetchTime is when this source was last fetched
+                      format: date-time
+                      type: string
+                    status:
+                      description: Status indicates if the source was successfully
+                        fetched
+                      enum:
+                      - Success
+                      - Failed
+                      - Pending
+                      type: string
+                    url:
+                      description: URL is the source URL
+                      type: string
+                  required:
+                  - status
+                  - url
+                  type: object
+                type: array
             type: object
         type: object
     served: true

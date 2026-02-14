@@ -2,8 +2,8 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/cache.duchaine.dev_piholes.yaml
-- bases/cache.duchaine.dev_blocklists.yaml
+- bases/pihole-operator.org_piholes.yaml
+- bases/pihole-operator.org_blocklists.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

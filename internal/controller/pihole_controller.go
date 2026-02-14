@@ -48,21 +48,21 @@ type PiholeReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=blocklists/finalizers,verbs=update
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholednsrecords/finalizers,verbs=update
-// +kubebuilder:rbac:groups=cache.duchaine.dev,resources=piholes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists/finalizers,verbs=update
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords/finalizers,verbs=update
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
 

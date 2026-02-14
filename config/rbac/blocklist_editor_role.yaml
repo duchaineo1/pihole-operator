@@ -1,7 +1,7 @@
 # This rule is not used by the project pihole-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the cache.duchaine.dev.
+# Grants permissions to create, update, and delete resources within the pihole-operator.org.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
 
@@ -14,7 +14,7 @@ metadata:
   name: blocklist-editor-role
 rules:
 - apiGroups:
-  - cache.duchaine.dev
+  - pihole-operator.org
   resources:
   - blocklists
   verbs:
@@ -26,7 +26,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - cache.duchaine.dev
+  - pihole-operator.org
   resources:
   - blocklists/status
   verbs:
