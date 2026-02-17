@@ -186,6 +186,64 @@ spec:
 			Eventually(verifyControllerUp).Should(Succeed())
 		})
 
+		It("should have all required RBAC permissions for the controller service account", func() {
+			// This test catches missing ClusterRole rules before they cause runtime failures.
+			// Each check corresponds to a +kubebuilder:rbac marker in the controller; if a
+			// marker is missing or the generated manifest is stale, this test will fail fast
+			// with a clear message rather than surfacing as a cryptic reconcile error later.
+			saID := fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccountName)
+
+			type rbacCheck struct {
+				verb     string
+				resource string // use "resource.group" for non-core API groups
+				desc     string
+			}
+
+			checks := []rbacCheck{
+				// core group
+				{"list", "pods", "core/pods"},
+				{"create", "events", "core/events"},
+				{"list", "secrets", "core/secrets"},
+				{"create", "secrets", "core/secrets"},
+				{"delete", "secrets", "core/secrets"},
+				{"list", "services", "core/services"},
+				{"create", "services", "core/services"},
+				{"delete", "services", "core/services"},
+				// apps group
+				{"list", "statefulsets.apps", "apps/statefulsets"},
+				{"create", "statefulsets.apps", "apps/statefulsets"},
+				{"delete", "statefulsets.apps", "apps/statefulsets"},
+				// networking.k8s.io group
+				{"list", "ingresses.networking.k8s.io", "networking.k8s.io/ingresses"},
+				{"create", "ingresses.networking.k8s.io", "networking.k8s.io/ingresses"},
+				{"delete", "ingresses.networking.k8s.io", "networking.k8s.io/ingresses"},
+				// policy group — the permission that was previously missing from the Helm chart
+				// ClusterRole, causing "poddisruptionbudgets.policy is forbidden" at runtime.
+				{"list", "poddisruptionbudgets.policy", "policy/poddisruptionbudgets"},
+				{"watch", "poddisruptionbudgets.policy", "policy/poddisruptionbudgets"},
+				{"create", "poddisruptionbudgets.policy", "policy/poddisruptionbudgets"},
+				{"update", "poddisruptionbudgets.policy", "policy/poddisruptionbudgets"},
+				{"patch", "poddisruptionbudgets.policy", "policy/poddisruptionbudgets"},
+				{"delete", "poddisruptionbudgets.policy", "policy/poddisruptionbudgets"},
+			}
+
+			for _, check := range checks {
+				By(fmt.Sprintf("checking permission: %s %s", check.verb, check.desc))
+				cmd := exec.Command("kubectl", "auth", "can-i", check.verb, check.resource,
+					"--as", saID, "--all-namespaces")
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(),
+					"Controller SA %q must be allowed to %s %s — "+
+						"check +kubebuilder:rbac markers and re-run 'make manifests'",
+					saID, check.verb, check.desc)
+			}
+
+			By("verifying controller logs are free of RBAC forbidden errors at startup")
+			// Give the controller a moment to attempt initial reconciliation of any
+			// pre-existing resources before we snapshot the logs.
+			Eventually(verifyNoForbiddenErrors(controllerPodName, namespace)).Should(Succeed())
+		})
+
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
@@ -1026,6 +1084,13 @@ spec:
 			}
 			Eventually(verifyPDBOwner).Should(Succeed())
 
+			By("verifying no RBAC forbidden errors appear in controller logs after PDB creation")
+			// If the policy/poddisruptionbudgets permission is missing from the ClusterRole,
+			// the reconcile loop will log "is forbidden:" here and the PDB will never be created.
+			// This assertion ensures that a stale or incomplete manifest is caught immediately.
+			Consistently(verifyNoForbiddenErrors(controllerPodName, namespace),
+				5*time.Second, time.Second).Should(Succeed())
+
 			By("scaling down to size=1 and verifying PDB is deleted")
 			cmd := exec.Command("kubectl", "patch", "pihole", piholeName,
 				"-n", testNamespace, "--type=merge",
@@ -1042,6 +1107,10 @@ spec:
 					"PDB should be deleted when size scales down to 1")
 			}
 			Eventually(verifyPDBGone, 2*time.Minute).Should(Succeed())
+
+			By("verifying no RBAC forbidden errors appear in controller logs after PDB deletion")
+			Consistently(verifyNoForbiddenErrors(controllerPodName, namespace),
+				5*time.Second, time.Second).Should(Succeed())
 		})
 	})
 
@@ -1161,6 +1230,28 @@ func applyManifest(yaml string) error {
 	cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
 	_, err = utils.Run(cmd)
 	return err
+}
+
+// verifyNoForbiddenErrors returns a Gomega-compatible assertion function that fetches
+// the controller logs and fails if any Kubernetes RBAC denial ("is forbidden:") is
+// present. Use with Eventually or Consistently:
+//
+//	Eventually(verifyNoForbiddenErrors(podName, ns)).Should(Succeed())
+//	Consistently(verifyNoForbiddenErrors(podName, ns), 5*time.Second, time.Second).Should(Succeed())
+//
+// The sentinel string "is forbidden:" is the exact phrasing the Kubernetes API server
+// uses for every RBAC denial, making it a reliable signal with very low false-positive
+// risk.
+func verifyNoForbiddenErrors(podName, ns string) func(g Gomega) {
+	return func(g Gomega) {
+		cmd := exec.Command("kubectl", "logs", podName, "-n", ns)
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred(), "Failed to fetch controller logs")
+		g.Expect(output).NotTo(ContainSubstring("is forbidden:"),
+			"Controller logs must not contain RBAC forbidden errors.\n"+
+				"This usually means a +kubebuilder:rbac marker is missing or 'make manifests' "+
+				"was not run after adding it.\n\nController logs:\n%s", output)
+	}
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response.
