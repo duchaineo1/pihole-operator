@@ -6,17 +6,15 @@ A Kubernetes operator to declaratively deploy and configure Pi-hole instances.
 
 - [x] Deploy Pi-hole with a single custom resource
 - [x] Manage blocklists declaratively
-- [ ] Whitelist management
 - [x] DNS record management
 
 ## Installation
 
 ```bash
-git clone https://github.com/duchaineo1/pihole-operator.git
-cd pihole-operator/
-pushd dist/chart
-helm install -n pihole-operator pihole-operator . -f values.yaml
-popd
+helm install pihole-operator oci://ghcr.io/duchaineo1/pihole-operator/charts/pihole-operator \
+  --version v1.0.9 \
+  --namespace pihole-operator --create-namespace \
+  -f dist/chart/values.yaml
 ```
 
 ## Usage
