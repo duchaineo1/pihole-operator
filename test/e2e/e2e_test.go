@@ -78,11 +78,29 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("kubectl", "create", "ns", testNamespace)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+		By("creating a shared Pihole CR for Whitelist/Blocklist/DNSRecord tests")
+		sharedPiholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: shared-pihole
+  namespace: %s
+spec:
+  size: 1
+  adminPassword: "shared-test-pw"
+  dnsServiceType: "ClusterIP"
+  webServiceType: "ClusterIP"
+`, testNamespace)
+		Expect(applyManifest(sharedPiholeYAML)).To(Succeed(), "Failed to create shared Pihole")
 	})
 
 	AfterAll(func() {
+		By("cleaning up shared Pihole")
+		cmd := exec.Command("kubectl", "delete", "pihole", "shared-pihole", "-n", testNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up test CRs namespace")
-		cmd := exec.Command("kubectl", "delete", "ns", testNamespace, "--ignore-not-found")
+		cmd = exec.Command("kubectl", "delete", "ns", testNamespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
 		By("cleaning up the curl pod for metrics")
