@@ -377,6 +377,11 @@ func (in *PiholeSpec) DeepCopyInto(out *PiholeSpec) {
 		*out = new(corev1.ResourceRequirements)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.UpstreamDNS != nil {
+		in, out := &in.UpstreamDNS, &out.UpstreamDNS
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Ingress != nil {
 		in, out := &in.Ingress, &out.Ingress
 		*out = new(PiholeIngress)

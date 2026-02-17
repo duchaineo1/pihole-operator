@@ -190,6 +190,14 @@ spec:
                 default: UTC
                 description: Timezone for Pi-hole (e.g., "America/New_York", "Europe/London")
                 type: string
+              upstreamDNS:
+                description: |-
+                  UpstreamDNS is a list of upstream DNS servers for Pi-hole to forward queries to.
+                  If not set, Pi-hole will use its default upstream servers (e.g. 8.8.8.8 and 8.8.4.4).
+                  Example: ["8.8.8.8", "8.8.4.4", "1.1.1.1"]
+                items:
+                  type: string
+                type: array
               webLoadBalancerIP:
                 description: WebLoadBalancerIP is the IP to use for Web LoadBalancer
                   service type
