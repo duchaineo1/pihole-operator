@@ -43,27 +43,50 @@ type WhitelistReconciler struct {
 	BaseURLOverride map[string]string
 }
 
-// WhitelistDomainRequest represents a domain allow-list entry for the Pi-hole API
+// WhitelistDomainRequest represents the POST body for /api/domains/allow/exact
 type WhitelistDomainRequest struct {
 	Domain  string `json:"domain"`
 	Comment string `json:"comment,omitempty"`
 	Groups  []int  `json:"groups,omitempty"`
 	Enabled bool   `json:"enabled"`
-	Type    string `json:"type"`
 }
 
-// WhitelistDomainResponse represents a domain from Pi-hole's domain API
+// WhitelistDomainResponse represents a domain from Pi-hole v6's /api/domains/allow/exact
 type WhitelistDomainResponse struct {
-	ID      int    `json:"id"`
-	Domain  string `json:"domain"`
-	Enabled bool   `json:"enabled"`
-	Comment string `json:"comment"`
-	Type    string `json:"type"`
+	ID           int    `json:"id"`
+	Domain       string `json:"domain"`
+	Unicode      string `json:"unicode,omitempty"`
+	Type         string `json:"type"`
+	Kind         string `json:"kind"`
+	Comment      string `json:"comment"`
+	Groups       []int  `json:"groups"`
+	Enabled      bool   `json:"enabled"`
+	DateAdded    int64  `json:"date_added"`
+	DateModified int64  `json:"date_modified"`
 }
 
-// WhitelistDomainsWrapper wraps the domains response
+// WhitelistDomainsWrapper wraps the Pi-hole v6 domains response
 type WhitelistDomainsWrapper struct {
-	Domains []WhitelistDomainResponse `json:"domains"`
+	Domains   []WhitelistDomainResponse `json:"domains"`
+	Processed *WhitelistProcessed       `json:"processed,omitempty"`
+	Took      float64                   `json:"took"`
+}
+
+// WhitelistProcessed contains success/error info from domain additions
+type WhitelistProcessed struct {
+	Success []WhitelistProcessedItem `json:"success"`
+	Errors  []WhitelistProcessedError `json:"errors"`
+}
+
+// WhitelistProcessedItem represents a successfully added domain
+type WhitelistProcessedItem struct {
+	Item string `json:"item"`
+}
+
+// WhitelistProcessedError represents a failed domain addition
+type WhitelistProcessedError struct {
+	Item  string `json:"item"`
+	Error string `json:"error"`
 }
 
 // Init initializes the reconciler
@@ -416,7 +439,6 @@ func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, baseURL, s
 		Comment: fmt.Sprintf("%s (managed)", whitelist.Spec.Description),
 		Groups:  []int{0},
 		Enabled: whitelist.Spec.Enabled,
-		Type:    "allow",
 	}
 
 	jsonData, err := json.Marshal(domainReq)
@@ -453,7 +475,24 @@ func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, baseURL, s
 		return fmt.Errorf("add failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
-	log.Info("Successfully added whitelist domain", "domain", domain, "status", resp.StatusCode)
+	// Check for processed errors in the response
+	var addResp WhitelistDomainsWrapper
+	if err := json.Unmarshal(body, &addResp); err == nil && addResp.Processed != nil {
+		if len(addResp.Processed.Errors) > 0 {
+			for _, e := range addResp.Processed.Errors {
+				// UNIQUE constraint means it already exists — not a real error
+				if e.Item == domain && e.Error != "" {
+					log.Info("Domain add reported error", "domain", e.Item, "error", e.Error)
+				}
+			}
+		}
+		if len(addResp.Processed.Success) > 0 {
+			log.Info("Successfully added whitelist domain", "domain", domain, "status", resp.StatusCode)
+		}
+	} else {
+		log.Info("Successfully added whitelist domain", "domain", domain, "status", resp.StatusCode)
+	}
+
 	return nil
 }
 
