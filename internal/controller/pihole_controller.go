@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -65,6 +67,7 @@ type PiholeReconciler struct {
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
 func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -106,6 +109,10 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if err := r.reconcileHeadlessService(ctx, pihole, log); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcileIngress(ctx, pihole, log); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -167,6 +174,18 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if len(found.Spec.Template.Spec.Containers) > 0 && found.Spec.Template.Spec.Containers[0].Image != desiredImage {
 		found.Spec.Template.Spec.Containers[0].Image = desiredImage
 		needsUpdate = true
+	}
+
+	// Check if resources changed
+	if len(found.Spec.Template.Spec.Containers) > 0 {
+		desiredResources := corev1.ResourceRequirements{}
+		if pihole.Spec.Resources != nil {
+			desiredResources = *pihole.Spec.Resources
+		}
+		if !reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].Resources, desiredResources) {
+			found.Spec.Template.Spec.Containers[0].Resources = desiredResources
+			needsUpdate = true
+		}
 	}
 
 	if needsUpdate {
@@ -540,6 +559,11 @@ func (r *PiholeReconciler) statefulSetForPihole(
 		},
 	}
 
+	// Set resource requests/limits if specified
+	if pihole.Spec.Resources != nil {
+		sts.Spec.Template.Spec.Containers[0].Resources = *pihole.Spec.Resources
+	}
+
 	if err := ctrl.SetControllerReference(pihole, sts, r.Scheme); err != nil {
 		return nil, err
 	}
@@ -686,11 +710,103 @@ func generateRandomPassword(length int) string {
 	return string(b)
 }
 
+func (r *PiholeReconciler) reconcileIngress(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
+	ingressName := pihole.Name + "-web"
+
+	// If ingress is not enabled, delete any existing ingress and return
+	if pihole.Spec.Ingress == nil || !pihole.Spec.Ingress.Enabled {
+		existing := &networkingv1.Ingress{}
+		err := r.Get(ctx, types.NamespacedName{Name: ingressName, Namespace: pihole.Namespace}, existing)
+		if err == nil {
+			log.Info("Deleting Ingress since ingress is disabled", "Ingress.Name", ingressName)
+			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+				return err
+			}
+		}
+		return nil
+	}
+
+	labels := map[string]string{
+		"app.kubernetes.io/name":       "pihole",
+		"app.kubernetes.io/instance":   pihole.Name,
+		"app.kubernetes.io/managed-by": "pihole-operator",
+	}
+
+	pathType := networkingv1.PathTypePrefix
+	ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        ingressName,
+			Namespace:   pihole.Namespace,
+			Labels:      labels,
+			Annotations: pihole.Spec.Ingress.Annotations,
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: pihole.Spec.Ingress.IngressClassName,
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: pihole.Spec.Ingress.Host,
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: pihole.Name + "-web",
+											Port: networkingv1.ServiceBackendPort{
+												Number: 80,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Configure TLS if enabled
+	if pihole.Spec.Ingress.TLS != nil && pihole.Spec.Ingress.TLS.Enabled {
+		tlsConfig := networkingv1.IngressTLS{
+			Hosts: []string{pihole.Spec.Ingress.Host},
+		}
+		if pihole.Spec.Ingress.TLS.SecretName != "" {
+			tlsConfig.SecretName = pihole.Spec.Ingress.TLS.SecretName
+		}
+		ingress.Spec.TLS = []networkingv1.IngressTLS{tlsConfig}
+	}
+
+	if err := ctrl.SetControllerReference(pihole, ingress, r.Scheme); err != nil {
+		return err
+	}
+
+	// Check if ingress already exists
+	existing := &networkingv1.Ingress{}
+	err := r.Get(ctx, types.NamespacedName{Name: ingressName, Namespace: pihole.Namespace}, existing)
+	if err != nil && apierrors.IsNotFound(err) {
+		log.Info("Creating Ingress", "Ingress.Namespace", ingress.Namespace, "Ingress.Name", ingress.Name)
+		return r.Create(ctx, ingress)
+	} else if err != nil {
+		return err
+	}
+
+	// Update existing ingress
+	existing.Spec = ingress.Spec
+	existing.Labels = ingress.Labels
+	existing.Annotations = ingress.Annotations
+	log.Info("Updating Ingress", "Ingress.Namespace", existing.Namespace, "Ingress.Name", existing.Name)
+	return r.Update(ctx, existing)
+}
+
 func (r *PiholeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&piholev1alpha1.Pihole{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		Owns(&networkingv1.Ingress{}).
 		Complete(r)
 }

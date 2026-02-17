@@ -1,0 +1,13 @@
+apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: pihole-with-limits
+spec:
+  size: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"

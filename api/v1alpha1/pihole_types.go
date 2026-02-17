@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -87,6 +88,47 @@ type PiholeSpec struct {
 	// +optional
 	// +kubebuilder:default="docker.io/pihole/pihole:2025.11.0"
 	Image string `json:"image,omitempty"`
+
+	// Resources defines CPU/memory requests and limits for the Pi-hole container
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Ingress configures an Ingress resource for the Pi-hole web UI
+	// +optional
+	Ingress *PiholeIngress `json:"ingress,omitempty"`
+}
+
+// PiholeIngress defines Ingress configuration for the Pi-hole web UI
+type PiholeIngress struct {
+	// Enabled controls whether an Ingress is created
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled"`
+
+	// IngressClassName is the Ingress class to use
+	// +optional
+	IngressClassName *string `json:"ingressClassName,omitempty"`
+
+	// Host is the hostname for the Ingress rule
+	// +kubebuilder:validation:Required
+	Host string `json:"host"`
+
+	// TLS configures TLS for the Ingress
+	// +optional
+	TLS *PiholeIngressTLS `json:"tls,omitempty"`
+
+	// Annotations to add to the Ingress
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// PiholeIngressTLS defines TLS config for the Ingress
+type PiholeIngressTLS struct {
+	// Enabled controls whether TLS is configured
+	Enabled bool `json:"enabled"`
+
+	// SecretName is the name of the TLS secret
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
 }
 
 // PiholeStatus defines the observed state of Pihole.
