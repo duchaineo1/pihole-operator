@@ -369,7 +369,7 @@ func (r *WhitelistReconciler) applyWhitelistToPod(ctx context.Context, baseURL, 
 
 // getWhitelistDomains retrieves current allow-list domains from Pi-hole
 func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, baseURL, sid string, log logr.Logger) ([]WhitelistDomainResponse, error) {
-	url := fmt.Sprintf("%s/api/domains?type=allow", baseURL)
+	url := fmt.Sprintf("%s/api/domains/allow/exact", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -391,9 +391,9 @@ func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, baseURL, 
 		return nil, fmt.Errorf("get domains failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
-	// Try to parse as wrapped response first
+	// Parse as wrapped response (Pi-hole v6 returns {"domains":[...], "took":...})
 	var wrapper WhitelistDomainsWrapper
-	if err := json.Unmarshal(body, &wrapper); err == nil && len(wrapper.Domains) > 0 {
+	if err := json.Unmarshal(body, &wrapper); err == nil {
 		return wrapper.Domains, nil
 	}
 
@@ -409,7 +409,7 @@ func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, baseURL, 
 
 // addWhitelistDomain adds a single domain to the allow list
 func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, baseURL, sid, domain string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
-	url := fmt.Sprintf("%s/api/domains?type=allow", baseURL)
+	url := fmt.Sprintf("%s/api/domains/allow/exact", baseURL)
 
 	domainReq := WhitelistDomainRequest{
 		Domain:  domain,
@@ -466,7 +466,7 @@ func (r *WhitelistReconciler) removeWhitelistFromPod(ctx context.Context, baseUR
 
 	// Delete each domain
 	for _, domain := range whitelist.Spec.Domains {
-		deleteURL := fmt.Sprintf("%s/api/domains/%s?type=allow", baseURL, urlEncode(domain))
+		deleteURL := fmt.Sprintf("%s/api/domains/allow/exact/%s", baseURL, urlEncode(domain))
 		req, _ := http.NewRequestWithContext(ctx, "DELETE", deleteURL, nil)
 		req.Header.Set("X-FTL-SID", sid)
 		req.Header.Set("Accept", "application/json")
