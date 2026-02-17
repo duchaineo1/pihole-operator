@@ -4,6 +4,8 @@
 resources:
 - bases/pihole-operator.org_piholes.yaml
 - bases/pihole-operator.org_blocklists.yaml
+- bases/pihole-operator.org_whitelists.yaml
+- bases/pihole-operator.org_piholednsrecords.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

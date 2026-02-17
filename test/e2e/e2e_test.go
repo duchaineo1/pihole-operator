@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -35,6 +36,9 @@ import (
 
 // namespace where the project is deployed in
 const namespace = "pihole-operator-system"
+
+// testNamespace is where we create test CRs (separate from the operator)
+const testNamespace = "pihole-e2e-test"
 
 // serviceAccountName created for the project
 const serviceAccountName = "pihole-operator-controller-manager"
@@ -48,9 +52,6 @@ const metricsRoleBindingName = "pihole-operator-metrics-binding"
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
 	BeforeAll(func() {
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
@@ -72,13 +73,38 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+		By("creating test namespace for CRs")
+		cmd = exec.Command("kubectl", "create", "ns", testNamespace)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+
+		By("creating a shared Pihole CR for Whitelist/Blocklist/DNSRecord tests")
+		sharedPiholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: shared-pihole
+  namespace: %s
+spec:
+  size: 1
+  adminPassword: "shared-test-pw"
+  dnsServiceType: "ClusterIP"
+  webServiceType: "ClusterIP"
+`, testNamespace)
+		Expect(applyManifest(sharedPiholeYAML)).To(Succeed(), "Failed to create shared Pihole")
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
 	AfterAll(func() {
+		By("cleaning up shared Pihole")
+		cmd := exec.Command("kubectl", "delete", "pihole", "shared-pihole", "-n", testNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
+		By("cleaning up test CRs namespace")
+		cmd = exec.Command("kubectl", "delete", "ns", testNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -94,8 +120,6 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 	})
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
 	AfterEach(func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
@@ -109,21 +133,12 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 
 			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
+			cmd = exec.Command("kubectl", "get", "events", "-n", testNamespace, "--sort-by=.lastTimestamp")
 			eventsOutput, err := utils.Run(cmd)
 			if err == nil {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
 			} else {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
-			}
-
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
 			}
 
 			By("Fetching controller manager pod description")
@@ -144,7 +159,6 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
-				// Get the name of the controller-manager pod
 				cmd := exec.Command("kubectl", "get",
 					"pods", "-l", "control-plane=controller-manager",
 					"-o", "go-template={{ range .items }}"+
@@ -161,7 +175,6 @@ var _ = Describe("Manager", Ordered, func() {
 				controllerPodName = podNames[0]
 				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
 
-				// Validate the pod's status
 				cmd = exec.Command("kubectl", "get",
 					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
 					"-n", namespace,
@@ -262,31 +275,695 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
 		})
+	})
 
-		// +kubebuilder:scaffold:e2e-webhooks-checks
+	// ---------------------------------------------------------------
+	// Pihole CR tests
+	// ---------------------------------------------------------------
+	Context("Pihole CR", func() {
+		const piholeName = "test-pihole"
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		AfterAll(func() {
+			cmd := exec.Command("kubectl", "delete", "pihole", piholeName, "-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should create a basic Pihole and reconcile all child resources", func() {
+			By("applying a basic Pihole CR")
+			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  adminPassword: "testpassword123"
+  timezone: "America/New_York"
+  storageSize: "2Gi"
+  dnsServiceType: "ClusterIP"
+  webServiceType: "ClusterIP"
+`, piholeName, testNamespace)
+			err := applyManifest(piholeYAML)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply Pihole CR")
+
+			By("verifying the StatefulSet is created with correct spec")
+			verifySTS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "StatefulSet should exist")
+
+				var sts map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &sts)).To(Succeed())
+
+				spec := sts["spec"].(map[string]interface{})
+
+				// Verify replicas
+				replicas := int(spec["replicas"].(float64))
+				g.Expect(replicas).To(Equal(1), "Should have 1 replica")
+
+				// Verify the container image
+				template := spec["template"].(map[string]interface{})
+				podSpec := template["spec"].(map[string]interface{})
+				containers := podSpec["containers"].([]interface{})
+				g.Expect(containers).To(HaveLen(1))
+				container := containers[0].(map[string]interface{})
+				g.Expect(container["image"]).To(Equal("docker.io/pihole/pihole:2025.11.0"))
+
+				// Verify timezone env var
+				envVars := container["env"].([]interface{})
+				foundTZ := false
+				for _, e := range envVars {
+					env := e.(map[string]interface{})
+					if env["name"] == "TZ" {
+						g.Expect(env["value"]).To(Equal("America/New_York"))
+						foundTZ = true
+					}
+				}
+				g.Expect(foundTZ).To(BeTrue(), "TZ env var should be set")
+
+				// Verify VolumeClaimTemplates storage size
+				vcts := spec["volumeClaimTemplates"].([]interface{})
+				g.Expect(vcts).To(HaveLen(1))
+				vct := vcts[0].(map[string]interface{})
+				vctSpec := vct["spec"].(map[string]interface{})
+				resources := vctSpec["resources"].(map[string]interface{})
+				requests := resources["requests"].(map[string]interface{})
+				g.Expect(requests["storage"]).To(Equal("2Gi"))
+			}
+			Eventually(verifySTS).Should(Succeed())
+
+			By("verifying the admin Secret is created")
+			verifySecret := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "secret", piholeName+"-admin",
+					"-n", testNamespace, "-o", "jsonpath={.data.password}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Admin secret should exist")
+				g.Expect(output).NotTo(BeEmpty(), "Password should not be empty")
+			}
+			Eventually(verifySecret).Should(Succeed())
+
+			By("verifying the DNS service is created with correct type")
+			verifyDNSService := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", piholeName+"-dns",
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "DNS service should exist")
+
+				var svc map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &svc)).To(Succeed())
+				spec := svc["spec"].(map[string]interface{})
+				g.Expect(spec["type"]).To(Equal("ClusterIP"))
+
+				// Verify DNS ports
+				ports := spec["ports"].([]interface{})
+				portNames := []string{}
+				for _, p := range ports {
+					port := p.(map[string]interface{})
+					portNames = append(portNames, port["name"].(string))
+					g.Expect(int(port["port"].(float64))).To(Equal(53))
+				}
+				g.Expect(portNames).To(ContainElements("dns-tcp", "dns-udp"))
+			}
+			Eventually(verifyDNSService).Should(Succeed())
+
+			By("verifying the Web service is created with correct type")
+			verifyWebService := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", piholeName+"-web",
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Web service should exist")
+
+				var svc map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &svc)).To(Succeed())
+				spec := svc["spec"].(map[string]interface{})
+				g.Expect(spec["type"]).To(Equal("ClusterIP"))
+
+				// Verify web ports
+				ports := spec["ports"].([]interface{})
+				portNames := []string{}
+				for _, p := range ports {
+					port := p.(map[string]interface{})
+					portNames = append(portNames, port["name"].(string))
+				}
+				g.Expect(portNames).To(ContainElements("http", "https"))
+			}
+			Eventually(verifyWebService).Should(Succeed())
+
+			By("verifying the headless service is created")
+			verifyHeadless := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", piholeName+"-headless",
+					"-n", testNamespace, "-o", "jsonpath={.spec.clusterIP}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Headless service should exist")
+				g.Expect(output).To(Equal("None"))
+			}
+			Eventually(verifyHeadless).Should(Succeed())
+
+			By("verifying the Pihole status is updated")
+			verifyStatus := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pihole", piholeName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var pihole map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &pihole)).To(Succeed())
+				status := pihole["status"].(map[string]interface{})
+
+				g.Expect(status["adminPasswordSecret"]).To(Equal(piholeName + "-admin"))
+				g.Expect(status["serviceName"]).To(Equal(piholeName))
+
+				// Verify condition
+				conditions := status["conditions"].([]interface{})
+				g.Expect(conditions).NotTo(BeEmpty())
+				found := false
+				for _, c := range conditions {
+					cond := c.(map[string]interface{})
+					if cond["type"] == "Available" {
+						g.Expect(cond["status"]).To(Equal("True"))
+						found = true
+					}
+				}
+				g.Expect(found).To(BeTrue(), "Should have Available=True condition")
+			}
+			Eventually(verifyStatus, 3*time.Minute).Should(Succeed())
+
+			By("verifying owner references are set on child resources")
+			verifyOwnerRef := func(g Gomega) {
+				for _, resource := range []string{
+					"statefulset/" + piholeName,
+					"service/" + piholeName + "-dns",
+					"service/" + piholeName + "-web",
+					"service/" + piholeName + "-headless",
+					"secret/" + piholeName + "-admin",
+				} {
+					cmd := exec.Command("kubectl", "get", resource,
+						"-n", testNamespace, "-o", "jsonpath={.metadata.ownerReferences[0].kind}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred(), "Resource %s should exist", resource)
+					g.Expect(output).To(Equal("Pihole"), "Resource %s should be owned by Pihole", resource)
+				}
+			}
+			Eventually(verifyOwnerRef).Should(Succeed())
+		})
+
+		It("should scale the StatefulSet when size is updated", func() {
+			By("patching the Pihole CR to size 2")
+			cmd := exec.Command("kubectl", "patch", "pihole", piholeName,
+				"-n", testNamespace, "--type=merge",
+				"-p", `{"spec":{"size":2}}`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the StatefulSet is scaled to 2 replicas")
+			verifyScale := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace, "-o", "jsonpath={.spec.replicas}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("2"))
+			}
+			Eventually(verifyScale).Should(Succeed())
+
+			By("scaling back to 1")
+			cmd = exec.Command("kubectl", "patch", "pihole", piholeName,
+				"-n", testNamespace, "--type=merge",
+				"-p", `{"spec":{"size":1}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			verifyScaleDown := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace, "-o", "jsonpath={.spec.replicas}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("1"))
+			}
+			Eventually(verifyScaleDown).Should(Succeed())
+		})
+
+		It("should update the container image when spec.image changes", func() {
+			By("patching the Pihole CR with a custom image")
+			cmd := exec.Command("kubectl", "patch", "pihole", piholeName,
+				"-n", testNamespace, "--type=merge",
+				"-p", `{"spec":{"image":"docker.io/pihole/pihole:2025.06.0"}}`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the StatefulSet container image is updated")
+			verifyImage := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace,
+					"-o", "jsonpath={.spec.template.spec.containers[0].image}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("docker.io/pihole/pihole:2025.06.0"))
+			}
+			Eventually(verifyImage).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Pihole with existing Secret ref
+	// ---------------------------------------------------------------
+	Context("Pihole with existing Secret", func() {
+		const piholeName = "test-pihole-secretref"
+		const secretName = "my-existing-secret"
+
+		AfterAll(func() {
+			cmd := exec.Command("kubectl", "delete", "pihole", piholeName, "-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+			cmd = exec.Command("kubectl", "delete", "secret", secretName, "-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should use an existing secret when adminPasswordSecretRef is set", func() {
+			By("creating a pre-existing secret")
+			cmd := exec.Command("kubectl", "create", "secret", "generic", secretName,
+				"--from-literal=password=mysecretpassword",
+				"-n", testNamespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("applying a Pihole CR referencing the existing secret")
+			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  adminPasswordSecretRef:
+    name: %s
+    key: password
+`, piholeName, testNamespace, secretName)
+			err = applyManifest(piholeYAML)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the operator does NOT create a new admin secret")
+			verifyNoAutoSecret := func(g Gomega) {
+				// The auto-generated secret name would be <piholeName>-admin
+				cmd := exec.Command("kubectl", "get", "secret", piholeName+"-admin",
+					"-n", testNamespace, "--ignore-not-found", "-o", "name")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(output)).To(BeEmpty(),
+					"Operator should not create auto-generated secret when secretRef is set")
+			}
+			// Wait for reconciliation to happen first
+			time.Sleep(5 * time.Second)
+			Consistently(verifyNoAutoSecret, 10*time.Second, 2*time.Second).Should(Succeed())
+
+			By("verifying the StatefulSet references the existing secret")
+			verifySTS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var sts map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &sts)).To(Succeed())
+
+				spec := sts["spec"].(map[string]interface{})
+				template := spec["template"].(map[string]interface{})
+				podSpec := template["spec"].(map[string]interface{})
+				containers := podSpec["containers"].([]interface{})
+				container := containers[0].(map[string]interface{})
+				envVars := container["env"].([]interface{})
+
+				foundSecretRef := false
+				for _, e := range envVars {
+					env := e.(map[string]interface{})
+					if env["name"] == "FTLCONF_webserver_api_password" {
+						valueFrom := env["valueFrom"].(map[string]interface{})
+						secretKeyRef := valueFrom["secretKeyRef"].(map[string]interface{})
+						g.Expect(secretKeyRef["name"]).To(Equal(secretName))
+						g.Expect(secretKeyRef["key"]).To(Equal("password"))
+						foundSecretRef = true
+					}
+				}
+				g.Expect(foundSecretRef).To(BeTrue(), "Should reference the existing secret")
+			}
+			Eventually(verifySTS).Should(Succeed())
+
+			By("verifying the status references the existing secret")
+			verifyStatus := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pihole", piholeName,
+					"-n", testNamespace, "-o", "jsonpath={.status.adminPasswordSecret}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal(secretName))
+			}
+			Eventually(verifyStatus, 3*time.Minute).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// CRD validation tests
+	// ---------------------------------------------------------------
+	Context("CRD validation", func() {
+		It("should reject a Whitelist with no domains", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Whitelist
+metadata:
+  name: bad-whitelist
+  namespace: %s
+spec:
+  domains: []
+`, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).To(HaveOccurred(), "Should reject Whitelist with empty domains")
+		})
+
+		It("should reject a Blocklist with no sources", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Blocklist
+metadata:
+  name: bad-blocklist
+  namespace: %s
+spec:
+  sources: []
+`, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).To(HaveOccurred(), "Should reject Blocklist with empty sources")
+		})
+
+		It("should reject a PiholeDNSRecord with invalid record type", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: bad-dnsrecord
+  namespace: %s
+spec:
+  hostname: test.local
+  recordType: MX
+  ipAddress: "1.2.3.4"
+`, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).To(HaveOccurred(), "Should reject PiholeDNSRecord with invalid recordType")
+		})
+
+		It("should reject a Pihole with invalid dnsServiceType", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: bad-pihole
+  namespace: %s
+spec:
+  size: 1
+  dnsServiceType: "InvalidType"
+`, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).To(HaveOccurred(), "Should reject Pihole with invalid dnsServiceType")
+		})
+
+		It("should reject a Blocklist with syncInterval below minimum", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Blocklist
+metadata:
+  name: bad-sync
+  namespace: %s
+spec:
+  sources:
+    - https://example.com/hosts
+  syncInterval: 5
+`, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).To(HaveOccurred(), "Should reject Blocklist with syncInterval < 60")
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Whitelist CR tests
+	// ---------------------------------------------------------------
+	Context("Whitelist CR", func() {
+		const whitelistName = "test-whitelist"
+
+		AfterAll(func() {
+			cmd := exec.Command("kubectl", "delete", "whitelist", whitelistName, "-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should accept a valid Whitelist and update status", func() {
+			By("applying a valid Whitelist CR")
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Whitelist
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  enabled: true
+  domains:
+    - "example.com"
+    - "safe-site.org"
+  description: "E2E test whitelist"
+`, whitelistName, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Whitelist CR exists with correct spec")
+			verifySpec := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "whitelist", whitelistName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var wl map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &wl)).To(Succeed())
+				spec := wl["spec"].(map[string]interface{})
+				g.Expect(spec["enabled"]).To(BeTrue())
+
+				domains := spec["domains"].([]interface{})
+				g.Expect(domains).To(HaveLen(2))
+				g.Expect(domains).To(ContainElements("example.com", "safe-site.org"))
+				g.Expect(spec["description"]).To(Equal("E2E test whitelist"))
+			}
+			Eventually(verifySpec).Should(Succeed())
+
+			By("verifying the Whitelist has a status condition set by the controller")
+			verifyStatus := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "whitelist", whitelistName,
+					"-n", testNamespace, "-o", "jsonpath={.status.conditions}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Controller should set status conditions")
+			}
+			Eventually(verifyStatus, 2*time.Minute).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Blocklist CR tests
+	// ---------------------------------------------------------------
+	Context("Blocklist CR", func() {
+		const blocklistName = "test-blocklist"
+
+		AfterAll(func() {
+			cmd := exec.Command("kubectl", "delete", "blocklist", blocklistName, "-n", testNamespace, "--ignore-not-found", "--timeout=30s")
+			_, _ = utils.Run(cmd)
+			// Force-remove finalizer if stuck
+			cmd = exec.Command("kubectl", "patch", "blocklist", blocklistName,
+				"-n", testNamespace, "--type=merge",
+				"-p", `{"metadata":{"finalizers":null}}`)
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should accept a valid Blocklist and set a finalizer", func() {
+			By("applying a valid Blocklist CR")
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Blocklist
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  enabled: true
+  sources:
+    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+  description: "E2E test blocklist"
+  syncInterval: 1440
+`, blocklistName, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Blocklist CR has a finalizer")
+			verifyFinalizer := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "blocklist", blocklistName,
+					"-n", testNamespace, "-o", "jsonpath={.metadata.finalizers}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring("pihole-operator.org/blocklist-finalizer"))
+			}
+			Eventually(verifyFinalizer).Should(Succeed())
+
+			By("verifying the Blocklist has a status condition set by the controller")
+			verifyStatus := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "blocklist", blocklistName,
+					"-n", testNamespace, "-o", "jsonpath={.status.conditions}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty(), "Controller should set status conditions")
+			}
+			Eventually(verifyStatus, 2*time.Minute).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// PiholeDNSRecord CR tests
+	// ---------------------------------------------------------------
+	Context("PiholeDNSRecord CR", func() {
+		const aRecordName = "test-a-record"
+		const cnameRecordName = "test-cname-record"
+
+		AfterAll(func() {
+			for _, name := range []string{aRecordName, cnameRecordName} {
+				cmd := exec.Command("kubectl", "delete", "piholednsrecord", name, "-n", testNamespace, "--ignore-not-found", "--timeout=30s")
+				_, _ = utils.Run(cmd)
+				cmd = exec.Command("kubectl", "patch", "piholednsrecord", name,
+					"-n", testNamespace, "--type=merge",
+					"-p", `{"metadata":{"finalizers":null}}`)
+				_, _ = utils.Run(cmd)
+			}
+		})
+
+		It("should accept a valid A record", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  hostname: myhost.home.local
+  recordType: A
+  ipAddress: "192.168.1.100"
+  description: "E2E test A record"
+`, aRecordName, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the PiholeDNSRecord spec is correct")
+			verifySpec := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "piholednsrecord", aRecordName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var rec map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &rec)).To(Succeed())
+				spec := rec["spec"].(map[string]interface{})
+				g.Expect(spec["hostname"]).To(Equal("myhost.home.local"))
+				g.Expect(spec["recordType"]).To(Equal("A"))
+				g.Expect(spec["ipAddress"]).To(Equal("192.168.1.100"))
+			}
+			Eventually(verifySpec).Should(Succeed())
+
+			By("verifying the controller set a finalizer")
+			verifyFinalizer := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "piholednsrecord", aRecordName,
+					"-n", testNamespace, "-o", "jsonpath={.metadata.finalizers}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring("pihole-operator.org/dnsrecord-finalizer"))
+			}
+			Eventually(verifyFinalizer).Should(Succeed())
+		})
+
+		It("should accept a valid CNAME record", func() {
+			yaml := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  hostname: alias.home.local
+  recordType: CNAME
+  cnameTarget: myhost.home.local
+  description: "E2E test CNAME record"
+`, cnameRecordName, testNamespace)
+			err := applyManifest(yaml)
+			Expect(err).NotTo(HaveOccurred())
+
+			verifySpec := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "piholednsrecord", cnameRecordName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var rec map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &rec)).To(Succeed())
+				spec := rec["spec"].(map[string]interface{})
+				g.Expect(spec["hostname"]).To(Equal("alias.home.local"))
+				g.Expect(spec["recordType"]).To(Equal("CNAME"))
+				g.Expect(spec["cnameTarget"]).To(Equal("myhost.home.local"))
+			}
+			Eventually(verifySpec).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Pihole CR cleanup / deletion test
+	// ---------------------------------------------------------------
+	Context("Pihole CR deletion", func() {
+		const piholeName = "test-pihole-delete"
+
+		It("should clean up all child resources when Pihole is deleted", func() {
+			By("creating a Pihole CR")
+			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  adminPassword: "deleteme"
+`, piholeName, testNamespace)
+			err := applyManifest(piholeYAML)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for resources to be created")
+			verifyCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(verifyCreated).Should(Succeed())
+
+			By("deleting the Pihole CR")
+			cmd := exec.Command("kubectl", "delete", "pihole", piholeName,
+				"-n", testNamespace, "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying child resources are garbage collected")
+			verifyGone := func(g Gomega) {
+				for _, resource := range []string{
+					"statefulset/" + piholeName,
+					"service/" + piholeName + "-dns",
+					"service/" + piholeName + "-web",
+					"service/" + piholeName + "-headless",
+					"secret/" + piholeName + "-admin",
+				} {
+					cmd := exec.Command("kubectl", "get", resource,
+						"-n", testNamespace, "--ignore-not-found", "-o", "name")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(strings.TrimSpace(output)).To(BeEmpty(),
+						"Resource %s should be deleted", resource)
+				}
+			}
+			Eventually(verifyGone, 2*time.Minute).Should(Succeed())
+		})
 	})
 })
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
 func serviceAccountToken() (string, error) {
 	const tokenRequestRawString = `{
 		"apiVersion": "authentication.k8s.io/v1",
 		"kind": "TokenRequest"
 	}`
 
-	// Temporary file to store the token request
 	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
 	tokenRequestFile := filepath.Join("/tmp", secretName)
 	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
@@ -296,7 +973,6 @@ func serviceAccountToken() (string, error) {
 
 	var out string
 	verifyTokenCreation := func(g Gomega) {
-		// Execute kubectl command to create the token
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
 			namespace,
@@ -306,7 +982,6 @@ func serviceAccountToken() (string, error) {
 		output, err := cmd.CombinedOutput()
 		g.Expect(err).NotTo(HaveOccurred())
 
-		// Parse the JSON output to extract the token
 		var token tokenRequest
 		err = json.Unmarshal(output, &token)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -325,8 +1000,25 @@ func getMetricsOutput() (string, error) {
 	return utils.Run(cmd)
 }
 
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
+// applyManifest writes a YAML string to a temp file and runs kubectl apply.
+func applyManifest(yaml string) error {
+	tmpFile, err := os.CreateTemp("", "e2e-manifest-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yaml); err != nil {
+		return err
+	}
+	tmpFile.Close()
+
+	cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
+	_, err = utils.Run(cmd)
+	return err
+}
+
+// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response.
 type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`

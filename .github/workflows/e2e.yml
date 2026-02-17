@@ -1,0 +1,28 @@
+name: E2E Tests
+
+on:
+  pull_request:
+
+jobs:
+  e2e:
+    name: E2E Tests (Kind)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Run E2E tests
+        run: make test-e2e CERT_MANAGER_INSTALL_SKIP=true
+        env:
+          CERT_MANAGER_INSTALL_SKIP: "true"
