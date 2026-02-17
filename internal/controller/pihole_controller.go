@@ -62,6 +62,9 @@ type PiholeReconciler struct {
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords/finalizers,verbs=update
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=whitelists,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=whitelists/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=pihole-operator.org,resources=whitelists/finalizers,verbs=update
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
