@@ -82,6 +82,101 @@ spec:
                 default: docker.io/pihole/pihole:2025.11.0
                 description: Image is the Pi-hole container image to use
                 type: string
+              ingress:
+                description: Ingress configures an Ingress resource for the Pi-hole
+                  web UI
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Annotations to add to the Ingress
+                    type: object
+                  enabled:
+                    default: false
+                    description: Enabled controls whether an Ingress is created
+                    type: boolean
+                  host:
+                    description: Host is the hostname for the Ingress rule
+                    type: string
+                  ingressClassName:
+                    description: IngressClassName is the Ingress class to use
+                    type: string
+                  tls:
+                    description: TLS configures TLS for the Ingress
+                    properties:
+                      enabled:
+                        description: Enabled controls whether TLS is configured
+                        type: boolean
+                      secretName:
+                        description: SecretName is the name of the TLS secret
+                        type: string
+                    required:
+                    - enabled
+                    type: object
+                required:
+                - enabled
+                - host
+                type: object
+              resources:
+                description: Resources defines CPU/memory requests and limits for
+                  the Pi-hole container
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
               size:
                 default: 1
                 description: |-

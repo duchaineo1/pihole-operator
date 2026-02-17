@@ -51,6 +51,8 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `dnsLoadBalancerIP` | — | Static IP for DNS LoadBalancer |
 | `webLoadBalancerIP` | — | Static IP for Web LoadBalancer |
 | `image` | `docker.io/pihole/pihole:2025.11.0` | Container image |
+| `resources` | — | CPU/memory requests and limits (standard Kubernetes resource requirements) |
+| `ingress` | — | Ingress configuration for the web UI (see below) |
 
 #### Admin password
 
@@ -85,6 +87,49 @@ spec:
 ```
 
 When `adminPasswordSecretRef` is set, `adminPassword` is ignored.
+
+#### Resource Limits
+
+Set CPU and memory requests/limits for the Pi-hole container using standard Kubernetes resource requirements:
+
+```yaml
+spec:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+```
+
+#### Ingress
+
+Expose the Pi-hole web UI via a Kubernetes Ingress resource:
+
+```yaml
+spec:
+  ingress:
+    enabled: true
+    host: pihole.example.com
+    ingressClassName: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    tls:
+      enabled: true
+      secretName: pihole-tls
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `ingress.enabled` | `false` | Whether to create an Ingress |
+| `ingress.host` | (required) | Hostname for the Ingress rule |
+| `ingress.ingressClassName` | — | Ingress class to use |
+| `ingress.annotations` | — | Annotations to add to the Ingress |
+| `ingress.tls.enabled` | `false` | Whether to configure TLS |
+| `ingress.tls.secretName` | — | Name of the TLS secret |
+
+When `ingress.enabled` is `false` or the ingress field is omitted, no Ingress resource is created. If an Ingress was previously created and you disable it, the operator will delete it.
 
 ### Blocklist
 
@@ -144,6 +189,8 @@ See the [`examples/`](examples/) directory for ready-to-use manifests:
 - [`basic.yaml`](examples/basic.yaml) — minimal Pi-hole with defaults
 - [`full.yaml`](examples/full.yaml) — all options configured
 - [`existing-secret.yaml`](examples/existing-secret.yaml) — using a pre-existing Secret for the admin password
+- [`resource-limits.yaml`](examples/resource-limits.yaml) — Pi-hole with CPU/memory requests and limits
+- [`ingress.yaml`](examples/ingress.yaml) — Pi-hole with Ingress for web UI
 - [`blocklist.yaml`](examples/blocklist.yaml) — ad-blocking blocklist
 - [`whitelist.yaml`](examples/whitelist.yaml) — domain allow list for false positives
 

@@ -1,0 +1,15 @@
+apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: pihole-with-ingress
+spec:
+  size: 1
+  ingress:
+    enabled: true
+    host: pihole.example.com
+    ingressClassName: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    tls:
+      enabled: true
+      secretName: pihole-tls
