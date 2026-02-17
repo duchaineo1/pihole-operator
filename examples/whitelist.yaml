@@ -1,0 +1,10 @@
+apiVersion: pihole-operator.org/v1alpha1
+kind: Whitelist
+metadata:
+  name: false-positives
+spec:
+  enabled: true
+  domains:
+    - "example.com"
+    - "safe-site.org"
+  description: "Known false positives"
