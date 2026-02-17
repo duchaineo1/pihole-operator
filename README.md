@@ -6,6 +6,7 @@ A Kubernetes operator to declaratively deploy and configure Pi-hole instances.
 
 - [x] Deploy Pi-hole with a single custom resource
 - [x] Manage blocklists declaratively
+- [x] Whitelist management
 - [x] DNS record management
 
 ## Installation
@@ -111,6 +112,31 @@ spec:
 | `syncInterval` | `1440` | Re-sync interval in minutes (60-10080) |
 | `description` | — | Human-readable description |
 
+### Whitelist
+
+Create a `Whitelist` resource to manage domain allow lists. It is automatically applied to all `Pihole` instances in the same namespace. Use this to override false positives from blocklists.
+
+```yaml
+apiVersion: pihole-operator.org/v1alpha1
+kind: Whitelist
+metadata:
+  name: false-positives
+spec:
+  enabled: true
+  domains:
+    - "example.com"
+    - "safe-site.org"
+  description: "Known false positives"
+```
+
+#### Spec fields
+
+| Field | Default | Description |
+|---|---|---|
+| `domains` | (required) | List of domains to whitelist (1-1000) |
+| `enabled` | `true` | Whether the whitelist is active |
+| `description` | — | Human-readable description |
+
 ## Examples
 
 See the [`examples/`](examples/) directory for ready-to-use manifests:
@@ -119,6 +145,7 @@ See the [`examples/`](examples/) directory for ready-to-use manifests:
 - [`full.yaml`](examples/full.yaml) — all options configured
 - [`existing-secret.yaml`](examples/existing-secret.yaml) — using a pre-existing Secret for the admin password
 - [`blocklist.yaml`](examples/blocklist.yaml) — ad-blocking blocklist
+- [`whitelist.yaml`](examples/whitelist.yaml) — domain allow list for false positives
 
 Apply an example:
 
