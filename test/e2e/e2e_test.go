@@ -901,6 +901,151 @@ spec:
 	})
 
 	// ---------------------------------------------------------------
+	// Upstream DNS e2e tests
+	// ---------------------------------------------------------------
+	Context("Pihole CR with custom upstream DNS", func() {
+		const piholeName = "test-pihole-upstream-dns"
+
+		AfterAll(func() {
+			cmd := exec.Command("kubectl", "delete", "pihole", piholeName, "-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should set FTLCONF_dns_upstreams env var in the StatefulSet", func() {
+			By("applying a Pihole CR with custom upstream DNS servers")
+			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  adminPassword: "testpassword123"
+  dnsServiceType: "ClusterIP"
+  webServiceType: "ClusterIP"
+  upstreamDNS:
+    - "1.1.1.1"
+    - "1.0.0.1"
+`, piholeName, testNamespace)
+			err := applyManifest(piholeYAML)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply Pihole CR with upstream DNS")
+
+			By("verifying FTLCONF_dns_upstreams is set in the StatefulSet")
+			verifyUpstreamDNS := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", piholeName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "StatefulSet should exist")
+
+				var sts map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &sts)).To(Succeed())
+				spec := sts["spec"].(map[string]interface{})
+				template := spec["template"].(map[string]interface{})
+				podSpec := template["spec"].(map[string]interface{})
+				containers := podSpec["containers"].([]interface{})
+				container := containers[0].(map[string]interface{})
+				envVars := container["env"].([]interface{})
+
+				foundUpstream := false
+				for _, e := range envVars {
+					env := e.(map[string]interface{})
+					if env["name"] == "FTLCONF_dns_upstreams" {
+						g.Expect(env["value"]).To(Equal("1.1.1.1;1.0.0.1"))
+						foundUpstream = true
+					}
+				}
+				g.Expect(foundUpstream).To(BeTrue(), "FTLCONF_dns_upstreams env var should be set")
+			}
+			Eventually(verifyUpstreamDNS).Should(Succeed())
+
+			By("verifying no PDB exists (size=1)")
+			verifyNoPDB := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "poddisruptionbudget", piholeName,
+					"-n", testNamespace, "--ignore-not-found", "-o", "name")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(output)).To(BeEmpty(), "No PDB should exist for size=1")
+			}
+			Eventually(verifyNoPDB).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// PodDisruptionBudget e2e tests
+	// ---------------------------------------------------------------
+	Context("Pihole CR with PodDisruptionBudget", func() {
+		const piholeName = "test-pihole-pdb"
+
+		AfterAll(func() {
+			cmd := exec.Command("kubectl", "delete", "pihole", piholeName, "-n", testNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should create a PDB when size > 1", func() {
+			By("applying a Pihole CR with size=3")
+			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 3
+  adminPassword: "testpassword123"
+  dnsServiceType: "ClusterIP"
+  webServiceType: "ClusterIP"
+`, piholeName, testNamespace)
+			err := applyManifest(piholeYAML)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply Pihole CR")
+
+			By("verifying PodDisruptionBudget is created with minAvailable=1")
+			verifyPDB := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "poddisruptionbudget", piholeName,
+					"-n", testNamespace, "-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "PDB should exist")
+
+				var pdb map[string]interface{}
+				g.Expect(json.Unmarshal([]byte(output), &pdb)).To(Succeed())
+				spec := pdb["spec"].(map[string]interface{})
+				minAvailable := spec["minAvailable"]
+				g.Expect(minAvailable).To(BeEquivalentTo(1), "minAvailable should be 1")
+
+				selector := spec["selector"].(map[string]interface{})
+				matchLabels := selector["matchLabels"].(map[string]interface{})
+				g.Expect(matchLabels["app.kubernetes.io/instance"]).To(Equal(piholeName))
+			}
+			Eventually(verifyPDB).Should(Succeed())
+
+			By("verifying PDB has correct owner reference")
+			verifyPDBOwner := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "poddisruptionbudget", piholeName,
+					"-n", testNamespace, "-o", "jsonpath={.metadata.ownerReferences[0].kind}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("Pihole"), "PDB should be owned by Pihole")
+			}
+			Eventually(verifyPDBOwner).Should(Succeed())
+
+			By("scaling down to size=1 and verifying PDB is deleted")
+			cmd := exec.Command("kubectl", "patch", "pihole", piholeName,
+				"-n", testNamespace, "--type=merge",
+				"-p", `{"spec":{"size":1}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			verifyPDBGone := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "poddisruptionbudget", piholeName,
+					"-n", testNamespace, "--ignore-not-found", "-o", "name")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(output)).To(BeEmpty(),
+					"PDB should be deleted when size scales down to 1")
+			}
+			Eventually(verifyPDBGone, 2*time.Minute).Should(Succeed())
+		})
+	})
+
+	// ---------------------------------------------------------------
 	// Pihole CR cleanup / deletion test
 	// ---------------------------------------------------------------
 	Context("Pihole CR deletion", func() {

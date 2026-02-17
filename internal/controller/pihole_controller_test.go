@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
@@ -699,6 +700,247 @@ var _ = Describe("Pihole Controller", func() {
 			result, err := doReconcile(nn)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(reconcile.Result{}))
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Upstream DNS tests
+	// ---------------------------------------------------------------
+	Context("Custom upstream DNS", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-upstream-dns", cachev1alpha1.PiholeSpec{
+				UpstreamDNS: []string{"1.1.1.1", "1.0.0.1"},
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should set FTLCONF_dns_upstreams env var in the StatefulSet", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			var upstreamValue string
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_dns_upstreams" {
+					upstreamValue = e.Value
+					break
+				}
+			}
+			Expect(upstreamValue).To(Equal("1.1.1.1;1.0.0.1"))
+		})
+
+		It("should update FTLCONF_dns_upstreams when upstream DNS servers change", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Update upstream DNS
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.UpstreamDNS = []string{"8.8.8.8", "8.8.4.4", "9.9.9.9"}
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeTrue())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			var upstreamValue string
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_dns_upstreams" {
+					upstreamValue = e.Value
+					break
+				}
+			}
+			Expect(upstreamValue).To(Equal("8.8.8.8;8.8.4.4;9.9.9.9"))
+		})
+	})
+
+	Context("No upstream DNS (default)", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-no-upstream", cachev1alpha1.PiholeSpec{})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should NOT set FTLCONF_dns_upstreams env var when upstreamDNS is unset", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				Expect(e.Name).NotTo(Equal("FTLCONF_dns_upstreams"),
+					"FTLCONF_dns_upstreams should not be set when upstreamDNS is empty")
+			}
+		})
+	})
+
+	Context("Upstream DNS removal", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-upstream-removal", cachev1alpha1.PiholeSpec{
+				UpstreamDNS: []string{"1.1.1.1"},
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should remove FTLCONF_dns_upstreams when upstreamDNS is cleared", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify env var is set initially
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			found := false
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_dns_upstreams" {
+					found = true
+				}
+			}
+			Expect(found).To(BeTrue())
+
+			// Clear upstream DNS
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.UpstreamDNS = nil
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeTrue())
+
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				Expect(e.Name).NotTo(Equal("FTLCONF_dns_upstreams"),
+					"FTLCONF_dns_upstreams should be removed when upstreamDNS is cleared")
+			}
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// PodDisruptionBudget tests
+	// ---------------------------------------------------------------
+	Context("PodDisruptionBudget - size > 1", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-pdb-multi", cachev1alpha1.PiholeSpec{
+				Size: ptr.To(int32(3)),
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should create a PDB with minAvailable=1 when size > 1", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			pdb := &policyv1.PodDisruptionBudget{}
+			Expect(k8sClient.Get(ctx, nn, pdb)).To(Succeed())
+
+			Expect(pdb.Spec.MinAvailable).NotTo(BeNil())
+			Expect(pdb.Spec.MinAvailable.IntValue()).To(Equal(1))
+
+			// Selector should match Pihole pods
+			Expect(pdb.Spec.Selector).NotTo(BeNil())
+			Expect(pdb.Spec.Selector.MatchLabels).To(HaveKeyWithValue(
+				"app.kubernetes.io/instance", "test-pdb-multi",
+			))
+		})
+
+		It("should set owner reference on the PDB", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+
+			pdb := &policyv1.PodDisruptionBudget{}
+			Expect(k8sClient.Get(ctx, nn, pdb)).To(Succeed())
+
+			Expect(pdb.OwnerReferences).To(HaveLen(1))
+			Expect(pdb.OwnerReferences[0].Name).To(Equal(pihole.Name))
+			Expect(*pdb.OwnerReferences[0].Controller).To(BeTrue())
+		})
+	})
+
+	Context("PodDisruptionBudget - size = 1 (default)", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-pdb-single", cachev1alpha1.PiholeSpec{
+				Size: ptr.To(int32(1)),
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should NOT create a PDB when size == 1", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			pdb := &policyv1.PodDisruptionBudget{}
+			err = k8sClient.Get(ctx, nn, pdb)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "PDB should not exist for size=1")
+		})
+	})
+
+	Context("PodDisruptionBudget - deletion when scaling down to 1", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-pdb-scaledown", cachev1alpha1.PiholeSpec{
+				Size: ptr.To(int32(3)),
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should delete the PDB when size is scaled down to 1", func() {
+			// First reconcile at size=3 creates PDB
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			pdb := &policyv1.PodDisruptionBudget{}
+			Expect(k8sClient.Get(ctx, nn, pdb)).To(Succeed())
+
+			// Scale down to 1
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.Size = ptr.To(int32(1))
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeTrue()) // StatefulSet update triggers requeue
+
+			// PDB should now be gone
+			err = k8sClient.Get(ctx, nn, pdb)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "PDB should be deleted when size scales to 1")
+		})
+	})
+
+	Context("PodDisruptionBudget - no spec.size (defaults to 1)", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-pdb-default", cachev1alpha1.PiholeSpec{})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should NOT create a PDB when spec.size is nil (defaults to 1)", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			pdb := &policyv1.PodDisruptionBudget{}
+			err = k8sClient.Get(ctx, nn, pdb)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "PDB should not exist when size defaults to 1")
 		})
 	})
 })

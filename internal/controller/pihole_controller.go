@@ -20,10 +20,12 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -71,6 +73,7 @@ type PiholeReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 
 func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -116,6 +119,10 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if err := r.reconcileIngress(ctx, pihole, log); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.reconcilePDB(ctx, pihole, log); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -187,6 +194,38 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		if !reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].Resources, desiredResources) {
 			found.Spec.Template.Spec.Containers[0].Resources = desiredResources
+			needsUpdate = true
+		}
+	}
+
+	// Check if upstream DNS servers changed
+	if len(found.Spec.Template.Spec.Containers) > 0 {
+		desiredUpstream := ""
+		if len(pihole.Spec.UpstreamDNS) > 0 {
+			desiredUpstream = strings.Join(pihole.Spec.UpstreamDNS, ";")
+		}
+		currentUpstream := ""
+		for _, e := range found.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "FTLCONF_dns_upstreams" {
+				currentUpstream = e.Value
+				break
+			}
+		}
+		if currentUpstream != desiredUpstream {
+			// Remove old upstream env var (if any) and re-add if needed
+			newEnv := make([]corev1.EnvVar, 0, len(found.Spec.Template.Spec.Containers[0].Env))
+			for _, e := range found.Spec.Template.Spec.Containers[0].Env {
+				if e.Name != "FTLCONF_dns_upstreams" {
+					newEnv = append(newEnv, e)
+				}
+			}
+			if desiredUpstream != "" {
+				newEnv = append(newEnv, corev1.EnvVar{
+					Name:  "FTLCONF_dns_upstreams",
+					Value: desiredUpstream,
+				})
+			}
+			found.Spec.Template.Spec.Containers[0].Env = newEnv
 			needsUpdate = true
 		}
 	}
@@ -562,6 +601,19 @@ func (r *PiholeReconciler) statefulSetForPihole(
 		},
 	}
 
+	// Inject upstream DNS env var when custom servers are specified.
+	// Pi-hole FTL v6 reads FTLCONF_dns_upstreams as a semicolon-separated list.
+	if len(pihole.Spec.UpstreamDNS) > 0 {
+		upstreamValue := strings.Join(pihole.Spec.UpstreamDNS, ";")
+		sts.Spec.Template.Spec.Containers[0].Env = append(
+			sts.Spec.Template.Spec.Containers[0].Env,
+			corev1.EnvVar{
+				Name:  "FTLCONF_dns_upstreams",
+				Value: upstreamValue,
+			},
+		)
+	}
+
 	// Set resource requests/limits if specified
 	if pihole.Spec.Resources != nil {
 		sts.Spec.Template.Spec.Containers[0].Resources = *pihole.Spec.Resources
@@ -804,6 +856,68 @@ func (r *PiholeReconciler) reconcileIngress(ctx context.Context, pihole *piholev
 	return r.Update(ctx, existing)
 }
 
+// reconcilePDB creates or deletes a PodDisruptionBudget for the Pihole StatefulSet.
+// A PDB with minAvailable=1 is created when size > 1, to ensure at least one
+// Pi-hole pod survives voluntary disruptions (node drains, rolling updates, etc.).
+// When size drops to 1 or below, any existing PDB is deleted.
+func (r *PiholeReconciler) reconcilePDB(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
+	pdbName := pihole.Name
+	size := int32(1)
+	if pihole.Spec.Size != nil {
+		size = *pihole.Spec.Size
+	}
+
+	existing := &policyv1.PodDisruptionBudget{}
+	err := r.Get(ctx, types.NamespacedName{Name: pdbName, Namespace: pihole.Namespace}, existing)
+
+	// If size <= 1, delete any existing PDB and return
+	if size <= 1 {
+		if err == nil {
+			log.Info("Deleting PodDisruptionBudget since size <= 1", "PDB.Name", pdbName)
+			if delErr := r.Delete(ctx, existing); delErr != nil && !apierrors.IsNotFound(delErr) {
+				return delErr
+			}
+		}
+		return nil
+	}
+
+	// size > 1: ensure the PDB exists
+	labels := map[string]string{
+		"app.kubernetes.io/name":       "pihole",
+		"app.kubernetes.io/instance":   pihole.Name,
+		"app.kubernetes.io/managed-by": "pihole-operator",
+	}
+
+	minAvailable := intstr.FromInt(1)
+	desired := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pdbName,
+			Namespace: pihole.Namespace,
+			Labels:    labels,
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MinAvailable: &minAvailable,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+		},
+	}
+
+	if err := ctrl.SetControllerReference(pihole, desired, r.Scheme); err != nil {
+		return err
+	}
+
+	if apierrors.IsNotFound(err) {
+		log.Info("Creating PodDisruptionBudget", "PDB.Namespace", desired.Namespace, "PDB.Name", desired.Name)
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+
+	// PDB already exists; nothing to update (minAvailable=1 is always the same)
+	return nil
+}
+
 func (r *PiholeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&piholev1alpha1.Pihole{}).
@@ -811,5 +925,6 @@ func (r *PiholeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.Ingress{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Complete(r)
 }

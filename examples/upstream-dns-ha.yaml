@@ -1,0 +1,20 @@
+# Example: Pi-hole with custom upstream DNS servers and HA (PDB enabled)
+# When size > 1, a PodDisruptionBudget is automatically created with minAvailable=1
+# to ensure at least one Pi-hole pod survives voluntary disruptions.
+apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: pihole-ha
+  namespace: default
+spec:
+  # size > 1 triggers automatic PodDisruptionBudget creation (minAvailable=1)
+  size: 3
+  adminPassword: "your-secure-password"
+  timezone: "America/New_York"
+  # Custom upstream DNS servers (semicolon-joined → FTLCONF_dns_upstreams env var)
+  upstreamDNS:
+    - "1.1.1.1"      # Cloudflare
+    - "1.0.0.1"      # Cloudflare secondary
+    - "9.9.9.9"      # Quad9
+  dnsServiceType: "LoadBalancer"
+  webServiceType: "ClusterIP"

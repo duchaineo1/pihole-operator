@@ -93,6 +93,12 @@ type PiholeSpec struct {
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// UpstreamDNS is a list of upstream DNS servers for Pi-hole to forward queries to.
+	// If not set, Pi-hole will use its default upstream servers (e.g. 8.8.8.8 and 8.8.4.4).
+	// Example: ["8.8.8.8", "8.8.4.4", "1.1.1.1"]
+	// +optional
+	UpstreamDNS []string `json:"upstreamDNS,omitempty"`
+
 	// Ingress configures an Ingress resource for the Pi-hole web UI
 	// +optional
 	Ingress *PiholeIngress `json:"ingress,omitempty"`
