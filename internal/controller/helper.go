@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,13 +23,19 @@ type PiholeAPIClient struct {
 	SID      string // Session ID after authentication
 }
 
-// NewPiholeAPIClient creates a new Pi-hole API client
+// NewPiholeAPIClient creates a new Pi-hole API client.
+// InsecureSkipVerify is set to true because Pi-hole uses self-signed TLS certificates.
 func NewPiholeAPIClient(baseURL, password string) *PiholeAPIClient {
 	return &PiholeAPIClient{
 		BaseURL:  baseURL,
 		Password: password,
 		Client: &http.Client{
 			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, // Pi-hole uses self-signed certs
+				},
+			},
 		},
 	}
 }
