@@ -154,9 +154,17 @@ var _ = Describe("Pihole Controller", func() {
 			}
 			Expect(envNames).To(ContainElements("TZ", "FTLCONF_webserver_api_password", "DNSMASQ_USER"))
 
-			// Check probes
+			// Check liveness probe uses HTTP GET against the web UI
 			Expect(container.LivenessProbe).NotTo(BeNil())
+			Expect(container.LivenessProbe.HTTPGet).NotTo(BeNil())
+			Expect(container.LivenessProbe.HTTPGet.Path).To(Equal("/admin/"))
+
+			// Check readiness probe uses DNS exec probe (not HTTP)
 			Expect(container.ReadinessProbe).NotTo(BeNil())
+			Expect(container.ReadinessProbe.Exec).NotTo(BeNil())
+			Expect(container.ReadinessProbe.Exec.Command).To(Equal([]string{
+				"dig", "@127.0.0.1", "-p", "53", "localhost", "+short", "+time=2", "+tries=1",
+			}))
 
 			// Check volume mounts
 			Expect(container.VolumeMounts).To(HaveLen(1))

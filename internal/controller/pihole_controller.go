@@ -19,14 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"strings"
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -36,9 +34,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"math/rand"
+	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"strings"
 	"time"
 )
 
@@ -585,14 +585,13 @@ func (r *PiholeReconciler) statefulSetForPihole(
 						},
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
-								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/admin/",
-									Port: intstr.FromInt(80),
+								Exec: &corev1.ExecAction{
+									Command: []string{"dig", "@127.0.0.1", "-p", "53", "localhost", "+short", "+time=2", "+tries=1"},
 								},
 							},
 							InitialDelaySeconds: 30,
 							PeriodSeconds:       10,
-							TimeoutSeconds:      3,
+							TimeoutSeconds:      5,
 							FailureThreshold:    3,
 						},
 					}},
