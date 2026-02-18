@@ -53,6 +53,8 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `webServiceType` | `ClusterIP` | Service type for the web UI |
 | `dnsLoadBalancerIP` | — | Static IP for DNS LoadBalancer |
 | `webLoadBalancerIP` | — | Static IP for Web LoadBalancer |
+
+> **Service drift detection:** If you change `dnsServiceType`, `webServiceType`, `dnsLoadBalancerIP`, or `webLoadBalancerIP` after the Pihole resource is created, the operator automatically detects the difference and updates the existing Service on the next reconcile. No manual deletion of the Service is required.
 | `image` | `docker.io/pihole/pihole:2025.11.0` | Container image |
 | `resources` | — | CPU/memory requests and limits (standard Kubernetes resource requirements) |
 | `upstreamDNS` | Pi-hole defaults | List of upstream DNS servers (e.g. `["1.1.1.1", "9.9.9.9"]`) |
@@ -253,6 +255,7 @@ See the [`examples/`](examples/) directory for ready-to-use manifests:
 
 - [`basic.yaml`](examples/basic.yaml) — minimal Pi-hole with defaults
 - [`full.yaml`](examples/full.yaml) — all options configured
+- [`pihole-loadbalancer.yaml`](examples/pihole-loadbalancer.yaml) — DNS and Web UI exposed via LoadBalancer with static IPs; demonstrates service drift detection
 - [`existing-secret.yaml`](examples/existing-secret.yaml) — using a pre-existing Secret for the admin password
 - [`resource-limits.yaml`](examples/resource-limits.yaml) — Pi-hole with CPU/memory requests and limits
 - [`ingress.yaml`](examples/ingress.yaml) — Pi-hole with Ingress for web UI
