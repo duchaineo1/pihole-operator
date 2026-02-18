@@ -368,6 +368,36 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 		log.Error(err, "Failed to get Service", "kind", serviceKind)
 		return err
 	}
+
+	// Service exists — diff desired vs current state and update if needed.
+	desiredType, desiredLBIP := desiredServiceSpec(pihole, serviceKind)
+	needsUpdate := false
+
+	if service.Spec.Type != desiredType {
+		log.Info("Updating Service", "Service.Name", service.Name, "oldType", service.Spec.Type, "newType", desiredType)
+		// When changing FROM NodePort to ClusterIP, strip auto-assigned nodePort values;
+		// Kubernetes rejects explicit nodePort values for ClusterIP services.
+		// LoadBalancer services also use nodePort, so no stripping is needed there.
+		if service.Spec.Type == corev1.ServiceTypeNodePort && desiredType == corev1.ServiceTypeClusterIP {
+			for i := range service.Spec.Ports {
+				service.Spec.Ports[i].NodePort = 0
+			}
+		}
+		service.Spec.Type = desiredType
+		needsUpdate = true
+	}
+
+	if service.Spec.LoadBalancerIP != desiredLBIP {
+		service.Spec.LoadBalancerIP = desiredLBIP
+		needsUpdate = true
+	}
+
+	if needsUpdate {
+		if err := r.Update(ctx, service); err != nil {
+			log.Error(err, "Failed to update Service", "Service.Name", service.Name, "kind", serviceKind)
+			return err
+		}
+	}
 	return nil
 }
 
@@ -681,6 +711,32 @@ func (r *PiholeReconciler) secretForPihole(
 	return secret, nil
 }
 
+// desiredServiceSpec returns the desired ServiceType and LoadBalancerIP for a given serviceKind.
+// This is the single source of truth used by both the create path and the drift-detection update path.
+func desiredServiceSpec(pihole *piholev1alpha1.Pihole, serviceKind string) (corev1.ServiceType, string) {
+	if serviceKind == "web" {
+		serviceType := corev1.ServiceTypeClusterIP
+		if pihole.Spec.WebServiceType != "" {
+			serviceType = corev1.ServiceType(pihole.Spec.WebServiceType)
+		}
+		lbIP := ""
+		if serviceType == corev1.ServiceTypeLoadBalancer {
+			lbIP = pihole.Spec.WebLoadBalancerIP
+		}
+		return serviceType, lbIP
+	}
+	// dns (default)
+	serviceType := corev1.ServiceTypeNodePort
+	if pihole.Spec.DnsServiceType != "" {
+		serviceType = corev1.ServiceType(pihole.Spec.DnsServiceType)
+	}
+	lbIP := ""
+	if serviceType == corev1.ServiceTypeLoadBalancer {
+		lbIP = pihole.Spec.DnsLoadBalancerIP
+	}
+	return serviceType, lbIP
+}
+
 func (r *PiholeReconciler) serviceForPihole(
 	pihole *piholev1alpha1.Pihole, serviceKind string) (*corev1.Service, error) {
 
@@ -690,15 +746,11 @@ func (r *PiholeReconciler) serviceForPihole(
 		"app.kubernetes.io/managed-by": "pihole-operator",
 	}
 
+	serviceType, lbIP := desiredServiceSpec(pihole, serviceKind)
+
 	var svc *corev1.Service
-	var serviceType corev1.ServiceType
 
 	if serviceKind == "web" {
-		serviceType = corev1.ServiceTypeClusterIP
-		if pihole.Spec.WebServiceType != "" {
-			serviceType = corev1.ServiceType(pihole.Spec.WebServiceType)
-		}
-
 		svc = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      pihole.Name + "-web",
@@ -706,8 +758,9 @@ func (r *PiholeReconciler) serviceForPihole(
 				Labels:    labels,
 			},
 			Spec: corev1.ServiceSpec{
-				Type:     serviceType,
-				Selector: labels,
+				Type:           serviceType,
+				LoadBalancerIP: lbIP,
+				Selector:       labels,
 				Ports: []corev1.ServicePort{
 					{
 						Name:       "http",
@@ -724,16 +777,7 @@ func (r *PiholeReconciler) serviceForPihole(
 				},
 			},
 		}
-
-		if serviceType == corev1.ServiceTypeLoadBalancer && pihole.Spec.WebLoadBalancerIP != "" {
-			svc.Spec.LoadBalancerIP = pihole.Spec.WebLoadBalancerIP
-		}
 	} else if serviceKind == "dns" {
-		serviceType = corev1.ServiceTypeNodePort
-		if pihole.Spec.DnsServiceType != "" {
-			serviceType = corev1.ServiceType(pihole.Spec.DnsServiceType)
-		}
-
 		svc = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      pihole.Name + "-dns",
@@ -741,8 +785,9 @@ func (r *PiholeReconciler) serviceForPihole(
 				Labels:    labels,
 			},
 			Spec: corev1.ServiceSpec{
-				Type:     serviceType,
-				Selector: labels,
+				Type:           serviceType,
+				LoadBalancerIP: lbIP,
+				Selector:       labels,
 				Ports: []corev1.ServicePort{
 					{
 						Name:       "dns-tcp",
@@ -758,10 +803,6 @@ func (r *PiholeReconciler) serviceForPihole(
 					},
 				},
 			},
-		}
-
-		if serviceType == corev1.ServiceTypeLoadBalancer && pihole.Spec.DnsLoadBalancerIP != "" {
-			svc.Spec.LoadBalancerIP = pihole.Spec.DnsLoadBalancerIP
 		}
 	} else {
 		return nil, fmt.Errorf("invalid serviceKind: %s, must be 'web' or 'dns'", serviceKind)

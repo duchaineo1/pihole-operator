@@ -1026,4 +1026,176 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(errors.IsNotFound(err)).To(BeTrue(), "PDB should not exist when size defaults to 1")
 		})
 	})
+
+	// ---------------------------------------------------------------
+	// Service drift / update detection tests
+	// ---------------------------------------------------------------
+
+	Context("Service drift - DNS type change (NodePort → LoadBalancer)", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			// Start with default DNS service type (NodePort)
+			nn = createPihole("test-drift-dns-type", cachev1alpha1.PiholeSpec{
+				DnsServiceType: "NodePort",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should update the DNS service when type changes from NodePort to LoadBalancer", func() {
+			// First reconcile: create DNS service as NodePort
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-dns-type-dns", Namespace: "default",
+			}, svc)).To(Succeed())
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeNodePort))
+
+			// Update the Pihole spec to LoadBalancer
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.DnsServiceType = "LoadBalancer"
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			// Second reconcile: should detect drift and update the service
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-dns-type-dns", Namespace: "default",
+			}, svc)).To(Succeed())
+			// The service type must have changed
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
+			// Note: LoadBalancer services also allocate nodePort values in Kubernetes,
+			// so nodePort may be non-zero here — that's correct and expected behavior.
+		})
+	})
+
+	Context("Service drift - DNS LoadBalancer IP change", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-drift-dns-lbip", cachev1alpha1.PiholeSpec{
+				DnsServiceType:    "LoadBalancer",
+				DnsLoadBalancerIP: "10.0.0.53",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should update the DNS service when LoadBalancerIP changes", func() {
+			// First reconcile: create DNS service with initial LB IP
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-dns-lbip-dns", Namespace: "default",
+			}, svc)).To(Succeed())
+			Expect(svc.Spec.LoadBalancerIP).To(Equal("10.0.0.53"))
+
+			// Update the Pihole spec with new LB IP
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.DnsLoadBalancerIP = "10.0.0.100"
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			// Second reconcile: should detect drift and update the service
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-dns-lbip-dns", Namespace: "default",
+			}, svc)).To(Succeed())
+			Expect(svc.Spec.LoadBalancerIP).To(Equal("10.0.0.100"))
+		})
+	})
+
+	Context("Service drift - Web type change (ClusterIP → LoadBalancer)", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-drift-web-type", cachev1alpha1.PiholeSpec{
+				WebServiceType: "ClusterIP",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should update the Web service when type changes from ClusterIP to LoadBalancer", func() {
+			// First reconcile: create Web service as ClusterIP
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-web-type-web", Namespace: "default",
+			}, svc)).To(Succeed())
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+
+			// Update the Pihole spec to LoadBalancer with a static IP
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.WebServiceType = "LoadBalancer"
+			pihole.Spec.WebLoadBalancerIP = "10.0.0.80"
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			// Second reconcile: should detect drift and update the service
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-web-type-web", Namespace: "default",
+			}, svc)).To(Succeed())
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
+			Expect(svc.Spec.LoadBalancerIP).To(Equal("10.0.0.80"))
+		})
+	})
+
+	Context("Service drift - no-op when service already matches desired state", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-drift-noop", cachev1alpha1.PiholeSpec{
+				DnsServiceType:    "LoadBalancer",
+				DnsLoadBalancerIP: "10.0.0.53",
+				WebServiceType:    "ClusterIP",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should NOT update the service when it already matches the desired state", func() {
+			// First reconcile: create services
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			dnsSvc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-noop-dns", Namespace: "default",
+			}, dnsSvc)).To(Succeed())
+			originalDNSVersion := dnsSvc.ResourceVersion
+
+			webSvc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-noop-web", Namespace: "default",
+			}, webSvc)).To(Succeed())
+			originalWebVersion := webSvc.ResourceVersion
+
+			// Second reconcile: no spec changes → services must not be updated
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-noop-dns", Namespace: "default",
+			}, dnsSvc)).To(Succeed())
+			Expect(dnsSvc.ResourceVersion).To(Equal(originalDNSVersion),
+				"DNS service ResourceVersion should not change when already up to date")
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: "test-drift-noop-web", Namespace: "default",
+			}, webSvc)).To(Succeed())
+			Expect(webSvc.ResourceVersion).To(Equal(originalWebVersion),
+				"Web service ResourceVersion should not change when already up to date")
+		})
+	})
 })

@@ -1,0 +1,31 @@
+# Pi-hole with LoadBalancer services and static IPs.
+#
+# This example shows how to configure Pi-hole so that both the DNS service
+# and the Web UI service are exposed via LoadBalancer with static IP addresses.
+#
+# If you change dnsServiceType or webServiceType (or the LoadBalancer IPs) after
+# the Pihole resource already exists, the operator automatically detects the drift
+# and updates the existing Service — no manual intervention required.
+#
+# Workflow example:
+#   1. Apply this manifest.                   → DNS + Web LoadBalancer services created.
+#   2. Edit dnsLoadBalancerIP to a new IP.    → Operator detects the change and updates
+#                                               the DNS service on the next reconcile.
+#   3. Change dnsServiceType back to NodePort. → Operator updates the service type
+#                                               and removes the LoadBalancer IP.
+apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: pihole-lb
+  namespace: default
+spec:
+  # DNS service: exposed via LoadBalancer with a static IP
+  dnsServiceType: "LoadBalancer"
+  dnsLoadBalancerIP: "192.168.1.53"
+
+  # Web UI service: exposed via LoadBalancer with a static IP
+  webServiceType: "LoadBalancer"
+  webLoadBalancerIP: "192.168.1.80"
+
+  timezone: "UTC"
+  storageSize: "1Gi"
