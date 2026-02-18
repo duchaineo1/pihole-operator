@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -413,6 +414,80 @@ var _ = Describe("Pihole Controller", func() {
 			sts := &appsv1.StatefulSet{}
 			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("docker.io/pihole/pihole:2024.01.0"))
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Readiness probe reconciliation tests (follow-up to PR #20)
+	// ---------------------------------------------------------------
+	Context("Readiness probe reconciliation", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-probe-reconcile", cachev1alpha1.PiholeSpec{})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should update an existing StatefulSet that has the old HTTP GET readiness probe to the DNS exec probe", func() {
+			// First reconcile creates the StatefulSet with the correct exec probe
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate a pre-PR-#20 StatefulSet by patching the readiness probe back to
+			// the old HTTP GET style, so we can verify the reconciler corrects it.
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			oldHTTPProbe := &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/admin/",
+						Port: intstr.FromInt(80),
+					},
+				},
+				InitialDelaySeconds: 60,
+				PeriodSeconds:       30,
+				TimeoutSeconds:      5,
+				FailureThreshold:    3,
+			}
+			sts.Spec.Template.Spec.Containers[0].ReadinessProbe = oldHTTPProbe
+			Expect(k8sClient.Update(ctx, sts)).To(Succeed())
+
+			// Verify the probe was actually stored as HTTP GET
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(sts.Spec.Template.Spec.Containers[0].ReadinessProbe.HTTPGet).NotTo(BeNil())
+			Expect(sts.Spec.Template.Spec.Containers[0].ReadinessProbe.Exec).To(BeNil())
+
+			// Reconcile — the controller should detect the probe mismatch and update it
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeTrue(), "reconciler should requeue after updating the probe")
+
+			// Confirm the probe is now the DNS exec probe
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			probe := sts.Spec.Template.Spec.Containers[0].ReadinessProbe
+			Expect(probe).NotTo(BeNil())
+			Expect(probe.HTTPGet).To(BeNil(), "HTTP GET probe should have been replaced")
+			Expect(probe.Exec).NotTo(BeNil(), "exec probe must be set")
+			Expect(probe.Exec.Command).To(Equal([]string{
+				"dig", "@127.0.0.1", "-p", "53", "localhost", "+short", "+time=2", "+tries=1",
+			}))
+			Expect(probe.InitialDelaySeconds).To(Equal(int32(30)))
+			Expect(probe.PeriodSeconds).To(Equal(int32(10)))
+			Expect(probe.TimeoutSeconds).To(Equal(int32(5)))
+			Expect(probe.FailureThreshold).To(Equal(int32(3)))
+			Expect(probe.SuccessThreshold).To(Equal(int32(1)))
+		})
+
+		It("should NOT trigger an update when the readiness probe is already correct", func() {
+			// First reconcile creates the StatefulSet with the correct exec probe
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: probe matches → no update, no requeue
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeFalse(), "no requeue when probe is already correct")
 		})
 	})
 
