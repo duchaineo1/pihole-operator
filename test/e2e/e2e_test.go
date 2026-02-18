@@ -971,6 +971,137 @@ spec:
 	})
 
 	// ---------------------------------------------------------------
+	// RBAC permission checks
+	// ---------------------------------------------------------------
+	Context("Controller RBAC permissions", func() {
+		// rbacCanI runs `kubectl auth can-i <verb> <resource> --as=system:serviceaccount:<ns>:<sa>`
+		// and returns true when the answer is "yes".
+		rbacCanI := func(verb, resource, subresource string) bool {
+			resourceArg := resource
+			if subresource != "" {
+				resourceArg = resource + "/" + subresource
+			}
+			cmd := exec.Command("kubectl", "auth", "can-i", verb, resourceArg,
+				"--as=system:serviceaccount:"+namespace+":"+serviceAccountName,
+				"-n", testNamespace)
+			out, err := utils.Run(cmd)
+			if err != nil {
+				return false
+			}
+			return strings.TrimSpace(out) == "yes"
+		}
+
+		It("should have core API group permissions", func() {
+			By("checking pod read permissions")
+			Expect(rbacCanI("get", "pods", "")).To(BeTrue(),
+				"controller SA must be able to get pods")
+			Expect(rbacCanI("list", "pods", "")).To(BeTrue(),
+				"controller SA must be able to list pods")
+			Expect(rbacCanI("watch", "pods", "")).To(BeTrue(),
+				"controller SA must be able to watch pods")
+
+			By("checking secrets permissions")
+			Expect(rbacCanI("get", "secrets", "")).To(BeTrue(),
+				"controller SA must be able to get secrets")
+			Expect(rbacCanI("create", "secrets", "")).To(BeTrue(),
+				"controller SA must be able to create secrets")
+			Expect(rbacCanI("update", "secrets", "")).To(BeTrue(),
+				"controller SA must be able to update secrets")
+			Expect(rbacCanI("delete", "secrets", "")).To(BeTrue(),
+				"controller SA must be able to delete secrets")
+
+			By("checking services permissions")
+			Expect(rbacCanI("get", "services", "")).To(BeTrue(),
+				"controller SA must be able to get services")
+			Expect(rbacCanI("create", "services", "")).To(BeTrue(),
+				"controller SA must be able to create services")
+			Expect(rbacCanI("update", "services", "")).To(BeTrue(),
+				"controller SA must be able to update services")
+			Expect(rbacCanI("delete", "services", "")).To(BeTrue(),
+				"controller SA must be able to delete services")
+		})
+
+		It("should have apps API group permissions for StatefulSets", func() {
+			Expect(rbacCanI("get", "statefulsets", "")).To(BeTrue(),
+				"controller SA must be able to get statefulsets")
+			Expect(rbacCanI("create", "statefulsets", "")).To(BeTrue(),
+				"controller SA must be able to create statefulsets")
+			Expect(rbacCanI("update", "statefulsets", "")).To(BeTrue(),
+				"controller SA must be able to update statefulsets")
+			Expect(rbacCanI("delete", "statefulsets", "")).To(BeTrue(),
+				"controller SA must be able to delete statefulsets")
+		})
+
+		It("should have policy API group permissions for PodDisruptionBudgets", func() {
+			By("checking PodDisruptionBudget CRUD permissions via 'kubectl auth can-i'")
+			for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
+				Expect(rbacCanI(verb, "poddisruptionbudgets", "")).To(BeTrue(),
+					"controller SA must be able to %s poddisruptionbudgets (policy API group)", verb)
+			}
+		})
+
+		It("should have networking.k8s.io permissions for Ingresses", func() {
+			for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
+				Expect(rbacCanI(verb, "ingresses", "")).To(BeTrue(),
+					"controller SA must be able to %s ingresses", verb)
+			}
+		})
+
+		It("should have pihole-operator.org permissions for custom resources", func() {
+			for _, resource := range []string{"piholes", "blocklists", "whitelists", "piholednsrecords"} {
+				for _, verb := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
+					Expect(rbacCanI(verb, resource, "")).To(BeTrue(),
+						"controller SA must be able to %s %s", verb, resource)
+				}
+			}
+		})
+
+		It("should have no forbidden errors in controller logs after reconciliation", func() {
+			By("ensuring at least one reconciliation has occurred by checking for a Pihole event")
+			checkName := "rbac-log-check-pihole"
+			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  adminPassword: "rbaccheckpw"
+  dnsServiceType: "ClusterIP"
+  webServiceType: "ClusterIP"
+`, checkName, testNamespace)
+			Expect(applyManifest(piholeYAML)).To(Succeed(), "Failed to apply Pihole CR for log check")
+			defer func() {
+				cmd := exec.Command("kubectl", "delete", "pihole", checkName, "-n", testNamespace, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			}()
+
+			By("waiting for the StatefulSet to appear (proves reconcile ran)")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", checkName, "-n", testNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}, 2*time.Minute).Should(Succeed())
+
+			By("scanning controller logs for 'forbidden' errors")
+			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
+			logs, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to retrieve controller logs")
+
+			forbiddenLines := []string{}
+			for _, line := range strings.Split(logs, "\n") {
+				lower := strings.ToLower(line)
+				if strings.Contains(lower, "forbidden") || strings.Contains(lower, "is not allowed") {
+					forbiddenLines = append(forbiddenLines, line)
+				}
+			}
+			Expect(forbiddenLines).To(BeEmpty(),
+				"Controller logs must not contain forbidden/unauthorized errors:\n%s",
+				strings.Join(forbiddenLines, "\n"))
+		})
+	})
+
+	// ---------------------------------------------------------------
 	// PodDisruptionBudget e2e tests
 	// ---------------------------------------------------------------
 	Context("Pihole CR with PodDisruptionBudget", func() {
