@@ -1,6 +1,0 @@
-## Append samples of your project ##
-resources:
-- cache_v1alpha1_pihole.yaml
-- cache_v1alpha1_pihole_loadbalancer.yaml
-- cache_v1alpha1_blocklist.yaml
-# +kubebuilder:scaffold:manifestskustomizesamples

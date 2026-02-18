@@ -4,10 +4,13 @@ A Kubernetes operator to declaratively deploy and configure Pi-hole instances.
 
 ## Features
 
-- [x] Deploy Pi-hole with a single custom resource
-- [x] Manage blocklists declaratively
-- [x] Whitelist management
-- [x] DNS record management
+- Deploy Pi-hole with a single custom resource
+- Manage blocklists declaratively
+- Whitelist management
+- DNS record management (A, AAAA, CNAME)
+- Custom upstream DNS servers
+- High availability with automatic PodDisruptionBudget
+- Ingress support for the web UI
 
 ## Installation
 
@@ -18,7 +21,7 @@ helm install pihole-operator oci://ghcr.io/duchaineo1/pihole-operator/charts/pih
   -f dist/chart/values.yaml
 ```
 
-## Usage
+## Custom Resources
 
 ### Pihole
 
@@ -52,6 +55,7 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `webLoadBalancerIP` | — | Static IP for Web LoadBalancer |
 | `image` | `docker.io/pihole/pihole:2025.11.0` | Container image |
 | `resources` | — | CPU/memory requests and limits (standard Kubernetes resource requirements) |
+| `upstreamDNS` | Pi-hole defaults | List of upstream DNS servers (e.g. `["1.1.1.1", "9.9.9.9"]`) |
 | `ingress` | — | Ingress configuration for the web UI (see below) |
 
 #### Admin password
@@ -88,9 +92,9 @@ spec:
 
 When `adminPasswordSecretRef` is set, `adminPassword` is ignored.
 
-#### Resource Limits
+#### Resource limits
 
-Set CPU and memory requests/limits for the Pi-hole container using standard Kubernetes resource requirements:
+Set CPU and memory requests/limits for the Pi-hole container:
 
 ```yaml
 spec:
@@ -101,6 +105,27 @@ spec:
     limits:
       cpu: "500m"
       memory: "512Mi"
+```
+
+#### Upstream DNS
+
+Override Pi-hole's default upstream DNS servers:
+
+```yaml
+spec:
+  upstreamDNS:
+    - "1.1.1.1"
+    - "1.0.0.1"
+    - "9.9.9.9"
+```
+
+#### High availability
+
+When `size` is greater than 1, each instance gets its own PVC and the operator syncs blocklists and DNS records to every pod individually. A PodDisruptionBudget is automatically created with `minAvailable: 1` to ensure at least one Pi-hole pod survives voluntary disruptions.
+
+```yaml
+spec:
+  size: 3
 ```
 
 #### Ingress
@@ -152,9 +177,9 @@ spec:
 
 | Field | Default | Description |
 |---|---|---|
-| `sources` | (required) | List of blocklist URLs (1-100) |
+| `sources` | (required) | List of blocklist URLs (1–100) |
 | `enabled` | `true` | Whether the blocklist is active |
-| `syncInterval` | `1440` | Re-sync interval in minutes (60-10080) |
+| `syncInterval` | `1440` | Re-sync interval in minutes (60–10080) |
 | `description` | — | Human-readable description |
 
 ### Whitelist
@@ -178,8 +203,48 @@ spec:
 
 | Field | Default | Description |
 |---|---|---|
-| `domains` | (required) | List of domains to whitelist (1-1000) |
+| `domains` | (required) | List of domains to whitelist (1–1000) |
 | `enabled` | `true` | Whether the whitelist is active |
+| `description` | — | Human-readable description |
+
+### PiholeDNSRecord
+
+Create a `PiholeDNSRecord` resource to manage local DNS records. Records are automatically applied to all `Pihole` instances in the same namespace.
+
+Supported record types: `A`, `AAAA`, and `CNAME`.
+
+```yaml
+apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: myhost-a-record
+spec:
+  hostname: myhost.home.local
+  recordType: A
+  ipAddress: "192.168.1.100"
+  description: "A record for myhost"
+```
+
+```yaml
+apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: myhost-cname
+spec:
+  hostname: alias.home.local
+  recordType: CNAME
+  cnameTarget: myhost.home.local
+  description: "CNAME alias pointing to myhost"
+```
+
+#### Spec fields
+
+| Field | Default | Description |
+|---|---|---|
+| `hostname` | (required) | DNS hostname (max 253 characters) |
+| `recordType` | (required) | Record type: `A`, `AAAA`, or `CNAME` |
+| `ipAddress` | — | IP address (required for `A` and `AAAA` records) |
+| `cnameTarget` | — | Target hostname (required for `CNAME` records) |
 | `description` | — | Human-readable description |
 
 ## Examples
@@ -191,8 +256,10 @@ See the [`examples/`](examples/) directory for ready-to-use manifests:
 - [`existing-secret.yaml`](examples/existing-secret.yaml) — using a pre-existing Secret for the admin password
 - [`resource-limits.yaml`](examples/resource-limits.yaml) — Pi-hole with CPU/memory requests and limits
 - [`ingress.yaml`](examples/ingress.yaml) — Pi-hole with Ingress for web UI
+- [`upstream-dns-ha.yaml`](examples/upstream-dns-ha.yaml) — custom upstream DNS with HA and PDB
 - [`blocklist.yaml`](examples/blocklist.yaml) — ad-blocking blocklist
 - [`whitelist.yaml`](examples/whitelist.yaml) — domain allow list for false positives
+- [`dnsrecord.yaml`](examples/dnsrecord.yaml) — local DNS records (A and CNAME)
 
 Apply an example:
 
