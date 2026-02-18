@@ -1,0 +1,57 @@
+name: Check CRD sync
+
+on:
+  pull_request:
+    paths:
+      - 'api/v1alpha1/**'
+      - 'config/crd/bases/**'
+      - 'dist/chart/templates/crd/**'
+
+jobs:
+  check-crd-sync:
+    name: Verify chart CRDs match config/crd/bases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check CRD spec properties are in sync
+        run: |
+          set -e
+          FAILED=0
+          for base in config/crd/bases/pihole-operator.org_*.yaml; do
+            name=$(basename "$base")
+            chart="dist/chart/templates/crd/$name"
+            if [ ! -f "$chart" ]; then
+              echo "❌ Missing chart CRD: $chart"
+              FAILED=1
+              continue
+            fi
+
+            # Strip Helm template directives so yq can parse the chart file
+            base_keys=$(yq '.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties | keys' "$base" | sort)
+            chart_keys=$(sed '/{{/d' "$chart" | yq '.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties | keys' | sort)
+
+            if [ "$base_keys" != "$chart_keys" ]; then
+              echo "❌ CRD spec properties out of sync: $name"
+              echo "  config/crd/bases:"
+              echo "$base_keys" | sed 's/^/    /'
+              echo "  dist/chart/templates/crd (after stripping Helm directives):"
+              echo "$chart_keys" | sed 's/^/    /'
+              FAILED=1
+            else
+              echo "✅ $name is in sync"
+            fi
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo ""
+            echo "Chart CRD templates are out of sync with config/crd/bases/."
+            echo "If you added or removed a CRD field, update the matching file in"
+            echo "dist/chart/templates/crd/ to include the same field."
+            exit 1
+          fi
