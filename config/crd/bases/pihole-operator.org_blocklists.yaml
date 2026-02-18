@@ -87,6 +87,14 @@ spec:
                 maximum: 10080
                 minimum: 60
                 type: integer
+              targetNamespaces:
+                description: |-
+                  TargetNamespaces lists namespaces to search for Pihole instances.
+                  If empty or not set, only Pihole instances in the same namespace are used (default behavior).
+                  Use ["*"] to target all namespaces (fleet-wide).
+                items:
+                  type: string
+                type: array
             required:
             - sources
             type: object

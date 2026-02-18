@@ -181,6 +181,37 @@ spec:
 | `enabled` | `true` | Whether the blocklist is active |
 | `syncInterval` | `1440` | Re-sync interval in minutes (60–10080) |
 | `description` | — | Human-readable description |
+| `targetNamespaces` | — | Namespaces to search for Pihole instances (see below) |
+
+#### Cross-namespace targeting
+
+By default a `Blocklist` only targets `Pihole` instances in its own namespace.
+Set `targetNamespaces` to reach Piholes in other namespaces:
+
+| Value | Behaviour |
+|---|---|
+| _(omitted / empty)_ | Same namespace only (default, backward-compatible) |
+| `["team-a", "team-b"]` | Only the listed namespaces |
+| `["*"]` | All namespaces in the cluster |
+
+```yaml
+# Target specific namespaces
+spec:
+  sources:
+    - https://example.com/malware.txt
+  targetNamespaces:
+    - team-a
+    - team-b
+```
+
+```yaml
+# Fleet-wide — every Pihole in the cluster
+spec:
+  sources:
+    - https://example.com/malware.txt
+  targetNamespaces:
+    - "*"
+```
 
 ### Whitelist
 
@@ -246,6 +277,30 @@ spec:
 | `ipAddress` | — | IP address (required for `A` and `AAAA` records) |
 | `cnameTarget` | — | Target hostname (required for `CNAME` records) |
 | `description` | — | Human-readable description |
+| `targetNamespaces` | — | Namespaces to search for Pihole instances (see below) |
+
+#### Cross-namespace targeting
+
+By default a `PiholeDNSRecord` only targets `Pihole` instances in its own namespace.
+Set `targetNamespaces` to push DNS records to Piholes in other namespaces — the same
+semantics as `Blocklist`:
+
+| Value | Behaviour |
+|---|---|
+| _(omitted / empty)_ | Same namespace only (default, backward-compatible) |
+| `["team-a", "team-b"]` | Only the listed namespaces |
+| `["*"]` | All namespaces in the cluster |
+
+```yaml
+# Apply to Piholes in team-a and team-b
+spec:
+  hostname: api.internal.example.com
+  recordType: A
+  ipAddress: "10.0.1.50"
+  targetNamespaces:
+    - team-a
+    - team-b
+```
 
 ## Examples
 
@@ -258,6 +313,8 @@ See the [`examples/`](examples/) directory for ready-to-use manifests:
 - [`ingress.yaml`](examples/ingress.yaml) — Pi-hole with Ingress for web UI
 - [`upstream-dns-ha.yaml`](examples/upstream-dns-ha.yaml) — custom upstream DNS with HA and PDB
 - [`blocklist.yaml`](examples/blocklist.yaml) — ad-blocking blocklist
+- [`cross-namespace-blocklist.yaml`](examples/cross-namespace-blocklist.yaml) — Blocklist targeting Piholes in other namespaces
+- [`cross-namespace-dnsrecord.yaml`](examples/cross-namespace-dnsrecord.yaml) — PiholeDNSRecord targeting Piholes in other namespaces
 - [`whitelist.yaml`](examples/whitelist.yaml) — domain allow list for false positives
 - [`dnsrecord.yaml`](examples/dnsrecord.yaml) — local DNS records (A and CNAME)
 

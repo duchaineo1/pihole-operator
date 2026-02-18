@@ -45,6 +45,12 @@ type PiholeDNSRecordSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=200
 	Description string `json:"description,omitempty"`
+
+	// TargetNamespaces lists namespaces to search for Pihole instances.
+	// If empty or not set, only Pihole instances in the same namespace are used (default behavior).
+	// Use ["*"] to target all namespaces (fleet-wide).
+	// +optional
+	TargetNamespaces []string `json:"targetNamespaces,omitempty"`
 }
 
 // PiholeDNSRecordStatus defines the observed state of PiholeDNSRecord

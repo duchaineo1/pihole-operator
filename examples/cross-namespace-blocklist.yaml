@@ -1,0 +1,47 @@
+# Cross-namespace Blocklist examples
+#
+# By default a Blocklist only targets Pihole instances in the same namespace.
+# Use targetNamespaces to reach Piholes in other namespaces.
+#
+# Requirements:
+#   - The operator ClusterRole must have `list` and `watch` on Pihole resources
+#     in the target namespaces (already granted by the default ClusterRole that
+#     ships with the operator).
+
+---
+# Example 1: target specific namespaces
+# This Blocklist lives in "platform" but applies its block-lists to the Pihole
+# instances found in "team-a" and "team-b".
+apiVersion: pihole-operator.org/v1alpha1
+kind: Blocklist
+metadata:
+  name: corporate-policy
+  namespace: platform
+spec:
+  sources:
+    - https://example.com/malware.txt
+    - https://example.com/ads.txt
+  enabled: true
+  syncInterval: 1440
+  description: "Corporate security policy — managed by platform team"
+  targetNamespaces:
+    - team-a
+    - team-b
+
+---
+# Example 2: target all namespaces (fleet-wide)
+# Using the special wildcard "*" causes the controller to search every namespace
+# for Pihole instances and apply the blocklist to all of them.
+apiVersion: pihole-operator.org/v1alpha1
+kind: Blocklist
+metadata:
+  name: fleet-wide-malware
+  namespace: platform
+spec:
+  sources:
+    - https://example.com/malware.txt
+  enabled: true
+  syncInterval: 720
+  description: "Fleet-wide malware protection — applies to every Pihole in the cluster"
+  targetNamespaces:
+    - "*"

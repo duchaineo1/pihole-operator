@@ -122,14 +122,14 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Find Piholes in same namespace
-	piholeList := &cachev1alpha1.PiholeList{}
-	if err := r.List(ctx, piholeList, client.InNamespace(blocklist.Namespace)); err != nil {
+	// Find Piholes across target namespaces
+	piholes, err := listPiholesForNamespaces(ctx, r.Client, blocklist.Namespace, blocklist.Spec.TargetNamespaces)
+	if err != nil {
 		log.Error(err, "Failed to list Piholes")
 		return ctrl.Result{}, err
 	}
 
-	if len(piholeList.Items) == 0 {
+	if len(piholes) == 0 {
 		log.Info("No Pihole instances found", "namespace", blocklist.Namespace)
 		meta.SetStatusCondition(&blocklist.Status.Conditions, metav1.Condition{
 			Type:    typeAvailableBlocklist,
@@ -144,7 +144,7 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Handle deletion
 	if !blocklist.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(blocklist, blocklistFinalizer) {
-			for _, pihole := range piholeList.Items {
+			for _, pihole := range piholes {
 				password, err := r.getPiholePassword(ctx, &pihole)
 				if err != nil {
 					log.Error(err, "Failed to get password for removal", "pihole", pihole.Name)
@@ -200,7 +200,7 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Apply to all Pihole pods
 	successCount := 0
 	var lastError error
-	for _, pihole := range piholeList.Items {
+	for _, pihole := range piholes {
 		password, err := r.getPiholePassword(ctx, &pihole)
 		if err != nil {
 			log.Error(err, "Failed to get password", "pihole", pihole.Name)

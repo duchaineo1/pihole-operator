@@ -93,14 +93,14 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	// Find Piholes in same namespace
-	piholeList := &cachev1alpha1.PiholeList{}
-	if err := r.List(ctx, piholeList, client.InNamespace(dnsRecord.Namespace)); err != nil {
+	// Find Piholes across target namespaces
+	piholes, err := listPiholesForNamespaces(ctx, r.Client, dnsRecord.Namespace, dnsRecord.Spec.TargetNamespaces)
+	if err != nil {
 		log.Error(err, "Failed to list Piholes")
 		return ctrl.Result{}, err
 	}
 
-	if len(piholeList.Items) == 0 {
+	if len(piholes) == 0 {
 		log.Info("No Pihole instances found", "namespace", dnsRecord.Namespace)
 		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
 			Type:    typeAvailableDNSRecord,
@@ -115,7 +115,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Handle deletion
 	if !dnsRecord.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(dnsRecord, dnsRecordFinalizer) {
-			for _, pihole := range piholeList.Items {
+			for _, pihole := range piholes {
 				password, err := r.getPiholePassword(ctx, &pihole)
 				if err != nil {
 					log.Error(err, "Failed to get password for removal", "pihole", pihole.Name)
@@ -177,7 +177,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// If the entry changed, remove the old one first
 	if lastApplied != "" && lastApplied != currentEntry {
-		for _, pihole := range piholeList.Items {
+		for _, pihole := range piholes {
 			password, err := r.getPiholePassword(ctx, &pihole)
 			if err != nil {
 				log.Error(err, "Failed to get password for old entry removal", "pihole", pihole.Name)
@@ -208,7 +208,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Apply to all Pihole pods
 	successCount := 0
 	var lastError error
-	for _, pihole := range piholeList.Items {
+	for _, pihole := range piholes {
 		password, err := r.getPiholePassword(ctx, &pihole)
 		if err != nil {
 			log.Error(err, "Failed to get password", "pihole", pihole.Name)
