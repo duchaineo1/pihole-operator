@@ -1,0 +1,42 @@
+# Cross-namespace PiholeDNSRecord examples
+#
+# By default a PiholeDNSRecord only targets Pihole instances in the same namespace.
+# Use targetNamespaces to push DNS records to Piholes in other namespaces.
+#
+# Requirements:
+#   - The operator ClusterRole must have `list` and `watch` on Pihole resources
+#     in the target namespaces (already granted by the default ClusterRole that
+#     ships with the operator).
+
+---
+# Example 1: push a DNS A record to Piholes in specific namespaces
+# This record is owned by the "platform" namespace but configures Piholes in
+# "team-a" and "team-b".
+apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: internal-api
+  namespace: platform
+spec:
+  hostname: api.internal.example.com
+  recordType: A
+  ipAddress: "10.0.1.50"
+  description: "Internal API endpoint — applied to team-a and team-b Piholes"
+  targetNamespaces:
+    - team-a
+    - team-b
+
+---
+# Example 2: push a CNAME record to all Piholes in the cluster
+apiVersion: pihole-operator.org/v1alpha1
+kind: PiholeDNSRecord
+metadata:
+  name: fleet-wide-cname
+  namespace: platform
+spec:
+  hostname: dashboard.internal.example.com
+  recordType: CNAME
+  cnameTarget: api.internal.example.com
+  description: "Fleet-wide CNAME alias — applies to every Pihole in the cluster"
+  targetNamespaces:
+    - "*"

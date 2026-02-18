@@ -489,4 +489,153 @@ var _ = Describe("Blocklist Controller", func() {
 			Expect(result).To(Equal(reconcile.Result{}))
 		})
 	})
+
+	Context("Cross-namespace targeting", func() {
+		const (
+			otherNS      = "bl-other-ns"
+			otherPihole  = "pihole-other"
+			allNS1       = "bl-all-ns1"
+			allNS2       = "bl-all-ns2"
+			allPihole1   = "pihole-all-1"
+			allPihole2   = "pihole-all-2"
+		)
+
+		// createNamespace ensures a Namespace object exists in envtest.
+		createNamespace := func(ns string) {
+			nsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}
+			_ = k8sClient.Create(ctx, nsObj) // ignore AlreadyExists
+		}
+
+		// setupPiholeInNS creates a Pihole + secret in any namespace and registers
+		// the URL override so the reconciler can reach the mock server.
+		setupPiholeInNS := func(ns, name string, url string) {
+			createNamespace(ns)
+			pihole := &cachev1alpha1.Pihole{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Spec:       cachev1alpha1.PiholeSpec{},
+			}
+			Expect(k8sClient.Create(ctx, pihole)).To(Succeed())
+
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: name + "-admin", Namespace: ns},
+				StringData: map[string]string{"password": "test-password"},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+			reconciler.BaseURLOverride[ns+"/"+name] = url
+		}
+
+		cleanupPiholeInNS := func(ns, name string) {
+			pihole := &cachev1alpha1.Pihole{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, pihole); err == nil {
+				k8sClient.Delete(ctx, pihole)
+			}
+			secret := &corev1.Secret{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name + "-admin", Namespace: ns}, secret); err == nil {
+				k8sClient.Delete(ctx, secret)
+			}
+		}
+
+		It("no targetNamespaces uses same-namespace Piholes only", func() {
+			setupPihole() // Pihole in piholeNS ("default")
+			defer cleanupPihole()
+
+			// Create a Pihole in a foreign namespace — it must NOT be called
+			mock2 := &mockPiholeAPI{}
+			srv2 := httptest.NewServer(mock2.handler())
+			defer srv2.Close()
+			setupPiholeInNS(otherNS, otherPihole, srv2.URL)
+			defer cleanupPiholeInNS(otherNS, otherPihole)
+
+			nn := createBlocklist("bl-default-ns", cachev1alpha1.BlocklistSpec{
+				Sources:      []string{"https://example.com/list.txt"},
+				Enabled:      true,
+				SyncInterval: 60,
+				// no TargetNamespaces — default behaviour
+			})
+			defer deleteBlocklist(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Primary mock (same ns) was called; foreign mock was NOT
+			mock.mu.Lock()
+			Expect(mock.authCalls).To(BeNumerically(">=", 1))
+			mock.mu.Unlock()
+
+			mock2.mu.Lock()
+			Expect(mock2.authCalls).To(Equal(0))
+			mock2.mu.Unlock()
+		})
+
+		It("targetNamespaces: [specific-ns] targets only that namespace", func() {
+			// Pihole in the default ns — should NOT be used
+			setupPihole()
+			defer cleanupPihole()
+
+			// Pihole in the target namespace — SHOULD be used
+			mock2 := &mockPiholeAPI{}
+			srv2 := httptest.NewServer(mock2.handler())
+			defer srv2.Close()
+			setupPiholeInNS(otherNS, otherPihole, srv2.URL)
+			defer cleanupPiholeInNS(otherNS, otherPihole)
+
+			nn := createBlocklist("bl-specific-ns", cachev1alpha1.BlocklistSpec{
+				Sources:          []string{"https://example.com/list.txt"},
+				Enabled:          true,
+				SyncInterval:     60,
+				TargetNamespaces: []string{otherNS},
+			})
+			defer deleteBlocklist(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Foreign (target) mock was called
+			mock2.mu.Lock()
+			Expect(mock2.authCalls).To(BeNumerically(">=", 1))
+			Expect(mock2.addCalls).To(ContainElement("https://example.com/list.txt"))
+			mock2.mu.Unlock()
+
+			// Default-ns mock was NOT called (blocklist targets otherNS, not default)
+			mock.mu.Lock()
+			Expect(mock.authCalls).To(Equal(0))
+			mock.mu.Unlock()
+		})
+
+		It("targetNamespaces: [\"*\"] targets Piholes in all namespaces", func() {
+			// Set up two Piholes in two different namespaces
+			mock1 := &mockPiholeAPI{}
+			srv1 := httptest.NewServer(mock1.handler())
+			defer srv1.Close()
+			setupPiholeInNS(allNS1, allPihole1, srv1.URL)
+			defer cleanupPiholeInNS(allNS1, allPihole1)
+
+			mock2 := &mockPiholeAPI{}
+			srv2 := httptest.NewServer(mock2.handler())
+			defer srv2.Close()
+			setupPiholeInNS(allNS2, allPihole2, srv2.URL)
+			defer cleanupPiholeInNS(allNS2, allPihole2)
+
+			nn := createBlocklist("bl-all-ns", cachev1alpha1.BlocklistSpec{
+				Sources:          []string{"https://example.com/list.txt"},
+				Enabled:          true,
+				SyncInterval:     60,
+				TargetNamespaces: []string{"*"},
+			})
+			defer deleteBlocklist(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Both Piholes were reached
+			mock1.mu.Lock()
+			Expect(mock1.authCalls).To(BeNumerically(">=", 1))
+			mock1.mu.Unlock()
+
+			mock2.mu.Lock()
+			Expect(mock2.authCalls).To(BeNumerically(">=", 1))
+			mock2.mu.Unlock()
+		})
+	})
 })

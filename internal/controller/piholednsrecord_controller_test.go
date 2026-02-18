@@ -515,4 +515,143 @@ var _ = Describe("PiholeDNSRecord Controller", func() {
 			Expect(result).To(Equal(reconcile.Result{}))
 		})
 	})
+
+	Context("Cross-namespace targeting", func() {
+		const (
+			dnsOtherNS     = "dns-other-ns"
+			dnsOtherPihole = "pihole-dns-other"
+			dnsAllNS1      = "dns-all-ns1"
+			dnsAllNS2      = "dns-all-ns2"
+			dnsAllPihole1  = "pihole-dns-all-1"
+			dnsAllPihole2  = "pihole-dns-all-2"
+		)
+
+		createNamespace := func(ns string) {
+			nsObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}
+			_ = k8sClient.Create(ctx, nsObj)
+		}
+
+		setupPiholeInNS := func(ns, name, url string) {
+			createNamespace(ns)
+			pihole := &cachev1alpha1.Pihole{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Spec:       cachev1alpha1.PiholeSpec{},
+			}
+			Expect(k8sClient.Create(ctx, pihole)).To(Succeed())
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: name + "-admin", Namespace: ns},
+				StringData: map[string]string{"password": "test-password"},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			reconciler.BaseURLOverride[ns+"/"+name] = url
+		}
+
+		cleanupPiholeInNS := func(ns, name string) {
+			pihole := &cachev1alpha1.Pihole{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, pihole); err == nil {
+				k8sClient.Delete(ctx, pihole)
+			}
+			secret := &corev1.Secret{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name + "-admin", Namespace: ns}, secret); err == nil {
+				k8sClient.Delete(ctx, secret)
+			}
+		}
+
+		It("no targetNamespaces uses same-namespace Piholes only", func() {
+			setupPihole() // Pihole in piholeNS
+			defer cleanupPihole()
+
+			// Foreign pihole — must NOT be called
+			mock2 := &mockDNSAPI{}
+			srv2 := httptest.NewServer(mock2.handler())
+			defer srv2.Close()
+			setupPiholeInNS(dnsOtherNS, dnsOtherPihole, srv2.URL)
+			defer cleanupPiholeInNS(dnsOtherNS, dnsOtherPihole)
+
+			nn := createDNSRecord("dns-default-ns-only", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "default-ns.local",
+				RecordType: "A",
+				IPAddress:  "10.1.1.1",
+				// no TargetNamespaces
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			Expect(mock.authCalls).To(BeNumerically(">=", 1))
+			mock.mu.Unlock()
+
+			mock2.mu.Lock()
+			Expect(mock2.authCalls).To(Equal(0))
+			mock2.mu.Unlock()
+		})
+
+		It("targetNamespaces: [specific-ns] targets only that namespace", func() {
+			setupPihole() // piholeNS — should NOT be called
+			defer cleanupPihole()
+
+			mock2 := &mockDNSAPI{}
+			srv2 := httptest.NewServer(mock2.handler())
+			defer srv2.Close()
+			setupPiholeInNS(dnsOtherNS, dnsOtherPihole, srv2.URL)
+			defer cleanupPiholeInNS(dnsOtherNS, dnsOtherPihole)
+
+			nn := createDNSRecord("dns-specific-ns", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:         "cross-ns.local",
+				RecordType:       "A",
+				IPAddress:        "10.2.2.2",
+				TargetNamespaces: []string{dnsOtherNS},
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Foreign Pihole was called
+			mock2.mu.Lock()
+			Expect(mock2.authCalls).To(BeNumerically(">=", 1))
+			Expect(mock2.addedHosts).To(ContainElement("10.2.2.2 cross-ns.local"))
+			mock2.mu.Unlock()
+
+			// Same-ns Pihole was NOT called (not in targetNamespaces)
+			mock.mu.Lock()
+			Expect(mock.authCalls).To(Equal(0))
+			mock.mu.Unlock()
+		})
+
+		It("targetNamespaces: [\"*\"] targets Piholes in all namespaces", func() {
+			mock1 := &mockDNSAPI{}
+			srv1 := httptest.NewServer(mock1.handler())
+			defer srv1.Close()
+			setupPiholeInNS(dnsAllNS1, dnsAllPihole1, srv1.URL)
+			defer cleanupPiholeInNS(dnsAllNS1, dnsAllPihole1)
+
+			mock2 := &mockDNSAPI{}
+			srv2 := httptest.NewServer(mock2.handler())
+			defer srv2.Close()
+			setupPiholeInNS(dnsAllNS2, dnsAllPihole2, srv2.URL)
+			defer cleanupPiholeInNS(dnsAllNS2, dnsAllPihole2)
+
+			nn := createDNSRecord("dns-all-ns", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:         "fleet.local",
+				RecordType:       "A",
+				IPAddress:        "10.3.3.3",
+				TargetNamespaces: []string{"*"},
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock1.mu.Lock()
+			Expect(mock1.authCalls).To(BeNumerically(">=", 1))
+			mock1.mu.Unlock()
+
+			mock2.mu.Lock()
+			Expect(mock2.authCalls).To(BeNumerically(">=", 1))
+			mock2.mu.Unlock()
+		})
+	})
 })

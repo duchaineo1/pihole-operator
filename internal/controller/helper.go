@@ -9,6 +9,9 @@ import (
 	"net/http"
 	neturl "net/url"
 	"time"
+
+	v1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // PiholeAPIClient handles communication with Pi-hole API
@@ -495,4 +498,47 @@ func (c *PiholeAPIClient) UpdateBlocklist(ctx context.Context, listID int, req B
 	}
 
 	return nil
+}
+
+// listPiholesForNamespaces returns all Pihole instances across the given target namespaces.
+// If targetNamespaces is empty, only the fallback namespace is searched.
+// If targetNamespaces contains "*", all namespaces are searched.
+func listPiholesForNamespaces(ctx context.Context, c client.Client, fallbackNamespace string, targetNamespaces []string) ([]v1alpha1.Pihole, error) {
+	// Default: same-namespace only (backward-compatible)
+	if len(targetNamespaces) == 0 {
+		list := &v1alpha1.PiholeList{}
+		if err := c.List(ctx, list, client.InNamespace(fallbackNamespace)); err != nil {
+			return nil, err
+		}
+		return list.Items, nil
+	}
+
+	// Wildcard: all namespaces
+	for _, ns := range targetNamespaces {
+		if ns == "*" {
+			list := &v1alpha1.PiholeList{}
+			if err := c.List(ctx, list); err != nil {
+				return nil, err
+			}
+			return list.Items, nil
+		}
+	}
+
+	// Specific namespaces: accumulate and deduplicate by namespace/name
+	seen := make(map[string]struct{})
+	var result []v1alpha1.Pihole
+	for _, ns := range targetNamespaces {
+		list := &v1alpha1.PiholeList{}
+		if err := c.List(ctx, list, client.InNamespace(ns)); err != nil {
+			return nil, err
+		}
+		for _, p := range list.Items {
+			key := p.Namespace + "/" + p.Name
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				result = append(result, p)
+			}
+		}
+	}
+	return result, nil
 }
