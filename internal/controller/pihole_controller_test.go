@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1196,6 +1199,106 @@ var _ = Describe("Pihole Controller", func() {
 			}, webSvc)).To(Succeed())
 			Expect(webSvc.ResourceVersion).To(Equal(originalWebVersion),
 				"Web service ResourceVersion should not change when already up to date")
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Stats enrichment tests
+	// ---------------------------------------------------------------
+	Context("Stats enrichment via mock Pi-hole API", func() {
+		var (
+			nn         types.NamespacedName
+			mockServer *httptest.Server
+		)
+
+		BeforeEach(func() {
+			// Set up a mock Pi-hole API server that handles auth and stats.
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/api/auth":
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"session": map[string]interface{}{
+							"valid": true,
+							"sid":   "test-sid-12345",
+						},
+					})
+
+				case r.Method == http.MethodGet && r.URL.Path == "/api/stats/summary":
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(StatsSummaryResponse{
+						Queries: struct {
+							Total          int64   `json:"total"`
+							Blocked        int64   `json:"blocked"`
+							PercentBlocked float64 `json:"percent_blocked"`
+							UniqueDomains  int64   `json:"unique_domains"`
+							Forwarded      int64   `json:"forwarded"`
+							Cached         int64   `json:"cached"`
+						}{
+							Total:          10000,
+							Blocked:        999,
+							PercentBlocked: 9.99,
+						},
+						Clients: struct {
+							Active int32 `json:"active"`
+							Total  int32 `json:"total"`
+						}{
+							Active: 7,
+							Total:  10,
+						},
+						Gravity: struct {
+							DomainsBeingBlocked int64 `json:"domains_being_blocked"`
+							LastUpdate          int64 `json:"last_update"`
+						}{
+							DomainsBeingBlocked: 150000,
+						},
+					})
+
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+
+			// Create a Pihole CR with a known password so the reconciler can auth.
+			nn = createPihole("test-stats", cachev1alpha1.PiholeSpec{
+				AdminPassword: "test-password",
+			})
+		})
+
+		AfterEach(func() {
+			mockServer.Close()
+			deletePihole(nn)
+		})
+
+		It("should populate stats fields in status after reconcile", func() {
+			// Build a reconciler that routes pod-0 traffic to the mock server.
+			statsReconciler := &PiholeReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				BaseURLOverride: map[string]string{
+					PodCacheKey("default", "test-stats", 0): mockServer.URL,
+				},
+			}
+
+			// First reconcile creates all child resources (StatefulSet, Services, Secret).
+			_, err := statsReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: StatefulSet already exists → reaches the stats-fetch path.
+			_, err = statsReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+
+			Expect(pihole.Status.QueriesTotal).To(Equal(int64(10000)))
+			Expect(pihole.Status.QueriesBlocked).To(Equal(int64(999)))
+			Expect(pihole.Status.BlockPercentage).To(Equal("9.99%"))
+			Expect(pihole.Status.GravityDomains).To(Equal(int64(150000)))
+			Expect(pihole.Status.UniqueClients).To(Equal(int32(7)))
+			Expect(pihole.Status.StatsLastUpdated).NotTo(BeNil())
 		})
 	})
 })

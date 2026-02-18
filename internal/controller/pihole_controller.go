@@ -50,6 +50,8 @@ const (
 type PiholeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// BaseURLOverride allows tests to substitute a mock URL for a given pod key (namespace/name-ordinal).
+	BaseURLOverride map[string]string
 }
 
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholes,verbs=get;list;watch;create;update;patch;delete
@@ -267,6 +269,59 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	pihole.Status.AdminPasswordSecret = adminSecretName(pihole)
 	pihole.Status.ServiceName = pihole.Name
 
+	// Populate DNSIP and WebURL from the DNS service.
+	dnsSvc := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Name: pihole.Name + "-dns", Namespace: pihole.Namespace}, dnsSvc); err == nil {
+		dnsIP := dnsSvc.Spec.ClusterIP
+		if dnsSvc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(dnsSvc.Status.LoadBalancer.Ingress) > 0 {
+			if lbIP := dnsSvc.Status.LoadBalancer.Ingress[0].IP; lbIP != "" {
+				dnsIP = lbIP
+			}
+		}
+		pihole.Status.DNSIP = dnsIP
+	} else {
+		log.Info("Could not fetch DNS service for DNSIP (non-fatal)", "error", err)
+	}
+
+	webSvc := &corev1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Name: pihole.Name + "-web", Namespace: pihole.Namespace}, webSvc); err == nil {
+		webIP := webSvc.Spec.ClusterIP
+		if webSvc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(webSvc.Status.LoadBalancer.Ingress) > 0 {
+			if lbIP := webSvc.Status.LoadBalancer.Ingress[0].IP; lbIP != "" {
+				webIP = lbIP
+			}
+		}
+		if webIP != "" && webIP != corev1.ClusterIPNone {
+			pihole.Status.WebURL = fmt.Sprintf("http://%s/admin", webIP)
+		}
+	} else {
+		log.Info("Could not fetch Web service for WebURL (non-fatal)", "error", err)
+	}
+
+	// Fetch stats from pod 0 (best-effort; don't fail reconcile on stats error).
+	if password, pwErr := r.getAdminPassword(ctx, pihole); pwErr == nil {
+		baseURL := PodBaseURL(pihole.Name, pihole.Namespace, 0)
+		if r.BaseURLOverride != nil {
+			if override, ok := r.BaseURLOverride[PodCacheKey(pihole.Namespace, pihole.Name, 0)]; ok {
+				baseURL = override
+			}
+		}
+		apiClient := NewPiholeAPIClient(baseURL, password)
+		if stats, statsErr := apiClient.GetStats(ctx); statsErr == nil {
+			pihole.Status.QueriesTotal = stats.Queries.Total
+			pihole.Status.QueriesBlocked = stats.Queries.Blocked
+			pihole.Status.BlockPercentage = fmt.Sprintf("%.2f%%", stats.Queries.PercentBlocked)
+			pihole.Status.GravityDomains = stats.Gravity.DomainsBeingBlocked
+			pihole.Status.UniqueClients = stats.Clients.Active
+			now := metav1.Now()
+			pihole.Status.StatsLastUpdated = &now
+		} else {
+			log.Info("Could not fetch Pi-hole stats (non-fatal)", "error", statsErr)
+		}
+	} else {
+		log.Info("Could not read admin password for stats fetch (non-fatal)", "error", pwErr)
+	}
+
 	meta.SetStatusCondition(&pihole.Status.Conditions, metav1.Condition{
 		Type:    typeAvailablePihole,
 		Status:  metav1.ConditionTrue,
@@ -279,7 +334,7 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }
 
 // adminSecretName returns the secret name to use for the admin password.
@@ -296,6 +351,23 @@ func adminSecretKey(pihole *piholev1alpha1.Pihole) string {
 		return pihole.Spec.AdminPasswordSecretRef.Key
 	}
 	return "password"
+}
+
+// getAdminPassword reads the admin password from the relevant Secret.
+func (r *PiholeReconciler) getAdminPassword(ctx context.Context, pihole *piholev1alpha1.Pihole) (string, error) {
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      adminSecretName(pihole),
+		Namespace: pihole.Namespace,
+	}, secret); err != nil {
+		return "", err
+	}
+	key := adminSecretKey(pihole)
+	pw, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("key %q not found in secret %q", key, adminSecretName(pihole))
+	}
+	return string(pw), nil
 }
 
 func (r *PiholeReconciler) reconcileSecret(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {

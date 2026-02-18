@@ -446,6 +446,67 @@ func (c *PiholeAPIClient) DeleteDNSCNAME(ctx context.Context, entry string) erro
 	return nil
 }
 
+// StatsSummaryResponse represents the response from /api/stats/summary
+type StatsSummaryResponse struct {
+	Queries struct {
+		Total          int64   `json:"total"`
+		Blocked        int64   `json:"blocked"`
+		PercentBlocked float64 `json:"percent_blocked"`
+		UniqueDomains  int64   `json:"unique_domains"`
+		Forwarded      int64   `json:"forwarded"`
+		Cached         int64   `json:"cached"`
+	} `json:"queries"`
+	Clients struct {
+		Active int32 `json:"active"`
+		Total  int32 `json:"total"`
+	} `json:"clients"`
+	Gravity struct {
+		DomainsBeingBlocked int64 `json:"domains_being_blocked"`
+		LastUpdate          int64 `json:"last_update"`
+	} `json:"gravity"`
+}
+
+// GetStats retrieves DNS statistics from the Pi-hole API.
+// It authenticates if no session exists, then calls GET /api/stats/summary.
+func (c *PiholeAPIClient) GetStats(ctx context.Context) (*StatsSummaryResponse, error) {
+	if c.SID == "" {
+		if err := c.Authenticate(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/stats/summary", c.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stats request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-FTL-SID", c.SID)
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call stats API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stats response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("stats API error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var stats StatsSummaryResponse
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return nil, fmt.Errorf("failed to parse stats response: %w", err)
+	}
+
+	return &stats, nil
+}
+
 // PodBaseURL returns the HTTPS base URL for an individual StatefulSet pod.
 func PodBaseURL(piholeName, namespace string, ordinal int32) string {
 	return fmt.Sprintf("https://%s-%d.%s-headless.%s.svc.cluster.local",

@@ -60,6 +60,35 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `upstreamDNS` | Pi-hole defaults | List of upstream DNS servers (e.g. `["1.1.1.1", "9.9.9.9"]`) |
 | `ingress` | — | Ingress configuration for the web UI (see below) |
 
+#### Status fields
+
+After each reconcile the operator populates the following fields on `status`:
+
+| Field | Description |
+|---|---|
+| `conditions` | Standard Kubernetes conditions (e.g. `Available`) |
+| `adminPasswordSecret` | Name of the Secret containing the admin password |
+| `serviceName` | Name of the main service |
+| `readyReplicas` | Number of ready StatefulSet replicas |
+| `dnsIP` | IP of the DNS service (LoadBalancer ingress IP, or ClusterIP for NodePort/ClusterIP types) |
+| `webURL` | URL to the Pi-hole web interface, e.g. `http://10.96.0.80/admin` |
+| `queriesTotal` | Total DNS queries processed (polled from pod 0) |
+| `queriesBlocked` | DNS queries blocked by Pi-hole (polled from pod 0) |
+| `blockPercentage` | Percentage of queries blocked, e.g. `"9.99%"` (polled from pod 0) |
+| `gravityDomains` | Number of domains in the gravity blocklist database (polled from pod 0) |
+| `uniqueClients` | Unique clients seen by Pi-hole (polled from pod 0) |
+| `statsLastUpdated` | RFC 3339 timestamp of the last successful stats fetch |
+
+Stats fields are populated on a best-effort basis — if the Pi-hole API is unreachable (e.g. during initial startup), the reconcile succeeds anyway and stats will be retried on the next reconcile cycle (every minute by default).
+
+Use `kubectl get pihole -o wide` or `kubectl get pihole -A` to see DNS IP and extended columns:
+
+```bash
+kubectl get pihole my-pihole -o wide
+# NAME         READY   DNS IP         WEB URL                      QUERIES   BLOCKED   GRAVITY
+# my-pihole    1/1     10.96.0.53     http://10.96.0.53/admin      48291     9.78%     150283
+```
+
 #### Admin password
 
 There are three ways to configure the admin password:
@@ -308,6 +337,7 @@ spec:
 
 See the [`examples/`](examples/) directory for ready-to-use manifests:
 
+- [`pihole.yaml`](examples/pihole.yaml) — minimal Pi-hole with annotated status output
 - [`basic.yaml`](examples/basic.yaml) — minimal Pi-hole with defaults
 - [`full.yaml`](examples/full.yaml) — all options configured
 - [`pihole-loadbalancer.yaml`](examples/pihole-loadbalancer.yaml) — DNS and Web UI exposed via LoadBalancer with static IPs; demonstrates service drift detection
