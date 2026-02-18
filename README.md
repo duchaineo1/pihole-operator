@@ -357,6 +357,84 @@ Apply an example:
 kubectl apply -f examples/basic.yaml
 ```
 
+## Prometheus Metrics
+
+The operator exposes Prometheus metrics at `:8080/metrics` (HTTP) via the controller-runtime metrics server.
+
+### Exposed Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `pihole_queries_total` | Gauge | `namespace`, `name` | Total DNS queries processed |
+| `pihole_queries_blocked` | Gauge | `namespace`, `name` | DNS queries blocked |
+| `pihole_block_percentage` | Gauge | `namespace`, `name` | Percentage of queries blocked |
+| `pihole_gravity_domains` | Gauge | `namespace`, `name` | Domains in the gravity blocklist |
+| `pihole_unique_clients` | Gauge | `namespace`, `name` | Unique DNS clients seen |
+
+Each metric uses `namespace` and `name` labels that correspond to the Pihole CR they were scraped from.
+Metrics are updated on every reconcile loop (approximately every 60 seconds per instance).
+
+### Enabling Prometheus Scraping
+
+#### Via Helm (ServiceMonitor)
+
+If you have the Prometheus Operator installed, enable the ServiceMonitor in the Helm chart:
+
+```yaml
+metrics:
+  enable: true
+prometheus:
+  enable: true
+```
+
+This creates:
+- A `Service` exposing port `8080` (`http-metrics`) on the controller manager pod.
+- A `ServiceMonitor` pointing Prometheus at `/metrics` on that port.
+
+#### Manual Prometheus Scrape Config
+
+If you're not using the Prometheus Operator, add the following scrape config to your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: pihole-operator
+    static_configs:
+      - targets: ['<operator-pod-ip>:8080']
+    metrics_path: /metrics
+```
+
+Or, using Kubernetes service discovery:
+
+```yaml
+scrape_configs:
+  - job_name: pihole-operator
+    kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+            - pihole-operator-system
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_label_control_plane]
+        regex: controller-manager
+        action: keep
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: http-metrics
+        action: keep
+```
+
+### Example Grafana Queries
+
+```promql
+# Queries per second by instance
+rate(pihole_queries_total{namespace="pihole"}[5m])
+
+# Block rate
+pihole_block_percentage{namespace="pihole"}
+
+# Gravity list size
+pihole_gravity_domains
+```
+
 ## Contributing
 
 Feel free to open a PR with your suggested change!

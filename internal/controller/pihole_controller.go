@@ -21,6 +21,7 @@ import (
 	"fmt"
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -315,6 +316,17 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			pihole.Status.UniqueClients = stats.Clients.Active
 			now := metav1.Now()
 			pihole.Status.StatsLastUpdated = &now
+
+			// Update Prometheus gauges with the latest stats.
+			labels := prometheus.Labels{
+				"namespace": pihole.Namespace,
+				"name":      pihole.Name,
+			}
+			piholeQueriesTotal.With(labels).Set(float64(stats.Queries.Total))
+			piholeQueriesBlocked.With(labels).Set(float64(stats.Queries.Blocked))
+			piholeBlockPercentage.With(labels).Set(stats.Queries.PercentBlocked)
+			piholeGravityDomains.With(labels).Set(float64(stats.Gravity.DomainsBeingBlocked))
+			piholeUniqueClients.With(labels).Set(float64(stats.Clients.Active))
 		} else {
 			log.Info("Could not fetch Pi-hole stats (non-fatal)", "error", statsErr)
 		}
