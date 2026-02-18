@@ -215,6 +215,34 @@ spec:
                 default: UTC
                 description: Timezone for Pi-hole (e.g., "America/New_York", "Europe/London")
                 type: string
+              tls:
+                description: |-
+                  TLS configures TLS verification for Pi-hole API communication.
+                  Defaults to skipping certificate verification because Pi-hole uses self-signed certificates.
+                properties:
+                  caSecretRef:
+                    description: |-
+                      CASecretRef references a Secret containing a CA certificate under the key "ca.crt".
+                      Used to verify Pi-hole's TLS certificate when InsecureSkipVerify is false.
+                    properties:
+                      key:
+                        default: password
+                        description: Key is the key within the secret to use
+                        type: string
+                      name:
+                        description: Name is the name of the secret
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  insecureSkipVerify:
+                    default: true
+                    description: |-
+                      InsecureSkipVerify disables TLS certificate verification.
+                      Defaults to true because Pi-hole typically uses self-signed certificates.
+                      Set to false when providing a trusted CA certificate via CASecretRef.
+                    type: boolean
+                type: object
               upstreamDNS:
                 description: |-
                   UpstreamDNS is a list of upstream DNS servers for Pi-hole to forward queries to.

@@ -32,6 +32,21 @@ type SecretKeyRef struct {
 	Key string `json:"key,omitempty"`
 }
 
+// PiholeAPITLSConfig defines TLS settings for Pi-hole API communication
+type PiholeAPITLSConfig struct {
+	// InsecureSkipVerify disables TLS certificate verification.
+	// Defaults to true because Pi-hole typically uses self-signed certificates.
+	// Set to false when providing a trusted CA certificate via CASecretRef.
+	// +optional
+	// +kubebuilder:default=true
+	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+
+	// CASecretRef references a Secret containing a CA certificate under the key "ca.crt".
+	// Used to verify Pi-hole's TLS certificate when InsecureSkipVerify is false.
+	// +optional
+	CASecretRef *SecretKeyRef `json:"caSecretRef,omitempty"`
+}
+
 // PiholeSpec defines the desired state of Pihole
 type PiholeSpec struct {
 	// Size defines the number of Pi-hole instances. Each instance gets its own
@@ -102,6 +117,11 @@ type PiholeSpec struct {
 	// Ingress configures an Ingress resource for the Pi-hole web UI
 	// +optional
 	Ingress *PiholeIngress `json:"ingress,omitempty"`
+
+	// TLS configures TLS verification for Pi-hole API communication.
+	// Defaults to skipping certificate verification because Pi-hole uses self-signed certificates.
+	// +optional
+	TLS *PiholeAPITLSConfig `json:"tls,omitempty"`
 }
 
 // PiholeIngress defines Ingress configuration for the Pi-hole web UI

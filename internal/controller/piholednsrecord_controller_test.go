@@ -178,10 +178,9 @@ var _ = Describe("PiholeDNSRecord Controller", func() {
 
 		cacheKey := fmt.Sprintf("%s/%s", piholeNS, piholeName)
 		reconciler = &PiholeDNSRecordReconciler{
-			Client:     k8sClient,
-			Scheme:     k8sClient.Scheme(),
-			httpClient: srv.Client(),
-			sidCache:   make(map[string]*cachedSID),
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			sidCache: make(map[string]*cachedSID),
 			BaseURLOverride: map[string]string{
 				cacheKey: srv.URL,
 			},

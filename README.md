@@ -59,6 +59,7 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `resources` | — | CPU/memory requests and limits (standard Kubernetes resource requirements) |
 | `upstreamDNS` | Pi-hole defaults | List of upstream DNS servers (e.g. `["1.1.1.1", "9.9.9.9"]`) |
 | `ingress` | — | Ingress configuration for the web UI (see below) |
+| `tls` | — | TLS verification settings for Pi-hole API communication (see below) |
 
 #### Status fields
 
@@ -186,6 +187,29 @@ spec:
 | `ingress.tls.secretName` | — | Name of the TLS secret |
 
 When `ingress.enabled` is `false` or the ingress field is omitted, no Ingress resource is created. If an Ingress was previously created and you disable it, the operator will delete it.
+
+#### API TLS (`spec.tls`)
+
+All three controllers (Pihole, Blocklist, Whitelist) communicate with Pi-hole's API over HTTPS. By default the operator skips TLS certificate verification (`InsecureSkipVerify: true`) because Pi-hole ships with a self-signed certificate.
+
+Use `spec.tls` to tighten this when you manage your own certificates:
+
+```yaml
+spec:
+  tls:
+    insecureSkipVerify: false   # validate the server certificate
+    caSecretRef:
+      name: pihole-ca-cert      # Secret containing the CA PEM
+      key: ca.crt               # optional — defaults to "ca.crt"
+```
+
+The referenced Secret must exist in the same namespace as the `Pihole` resource and contain the CA certificate under the specified key.
+
+| Field | Default | Description |
+|---|---|---|
+| `tls.insecureSkipVerify` | `true` | Skip TLS certificate verification |
+| `tls.caSecretRef.name` | — | Name of the Secret containing the CA certificate |
+| `tls.caSecretRef.key` | `ca.crt` | Key within the Secret |
 
 ### Blocklist
 

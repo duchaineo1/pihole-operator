@@ -306,7 +306,9 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				baseURL = override
 			}
 		}
-		apiClient := NewPiholeAPIClient(baseURL, password)
+		caData, _ := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
+		tlsCfg := buildTLSConfig(pihole.Spec.TLS, caData)
+		apiClient := NewPiholeAPIClient(baseURL, password, buildHTTPClient(tlsCfg))
 		if stats, statsErr := apiClient.GetStats(ctx); statsErr == nil {
 			pihole.Status.QueriesTotal = stats.Queries.Total
 			pihole.Status.QueriesBlocked = stats.Queries.Blocked

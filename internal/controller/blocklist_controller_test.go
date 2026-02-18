@@ -189,10 +189,9 @@ var _ = Describe("Blocklist Controller", func() {
 
 		cacheKey := fmt.Sprintf("%s/%s", piholeNS, piholeName)
 		reconciler = &BlocklistReconciler{
-			Client:     k8sClient,
-			Scheme:     k8sClient.Scheme(),
-			httpClient: srv.Client(),
-			sidCache:   make(map[string]*cachedSID),
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			sidCache: make(map[string]*cachedSID),
 			BaseURLOverride: map[string]string{
 				cacheKey: srv.URL,
 			},
