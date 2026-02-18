@@ -230,6 +230,14 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Reconcile readiness probe
+	if len(found.Spec.Template.Spec.Containers) > 0 {
+		if !reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].ReadinessProbe, piholeReadinessProbe()) {
+			found.Spec.Template.Spec.Containers[0].ReadinessProbe = piholeReadinessProbe()
+			needsUpdate = true
+		}
+	}
+
 	if needsUpdate {
 		if err = r.Update(ctx, found); err != nil {
 			log.Error(err, "Failed to update StatefulSet",
@@ -583,17 +591,7 @@ func (r *PiholeReconciler) statefulSetForPihole(
 							TimeoutSeconds:      5,
 							FailureThreshold:    3,
 						},
-						ReadinessProbe: &corev1.Probe{
-							ProbeHandler: corev1.ProbeHandler{
-								Exec: &corev1.ExecAction{
-									Command: []string{"dig", "@127.0.0.1", "-p", "53", "localhost", "+short", "+time=2", "+tries=1"},
-								},
-							},
-							InitialDelaySeconds: 30,
-							PeriodSeconds:       10,
-							TimeoutSeconds:      5,
-							FailureThreshold:    3,
-						},
+						ReadinessProbe: piholeReadinessProbe(),
 					}},
 				},
 			},
@@ -622,6 +620,26 @@ func (r *PiholeReconciler) statefulSetForPihole(
 		return nil, err
 	}
 	return sts, nil
+}
+
+// piholeReadinessProbe returns the canonical readiness probe for the pihole container.
+// Using a DNS exec probe (rather than HTTP) ensures the pod is only marked ready once
+// the DNS resolver is fully operational — not just the web UI.
+// Both the StatefulSet creation path and the reconcile/update path reference this
+// function so the probe definition stays in a single place.
+func piholeReadinessProbe() *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			Exec: &corev1.ExecAction{
+				Command: []string{"dig", "@127.0.0.1", "-p", "53", "localhost", "+short", "+time=2", "+tries=1"},
+			},
+		},
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
+		SuccessThreshold:    1, // Kubernetes API server defaults this to 1; set explicitly so reflect.DeepEqual works correctly.
+	}
 }
 
 func getEnvOrDefault(value, defaultValue string) string {
