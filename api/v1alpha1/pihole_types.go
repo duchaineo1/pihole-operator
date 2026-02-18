@@ -153,10 +153,47 @@ type PiholeStatus struct {
 	// ReadyReplicas is the number of ready replicas
 	// +optional
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+
+	// QueriesTotal is the total number of DNS queries processed (from pod 0)
+	// +optional
+	QueriesTotal int64 `json:"queriesTotal,omitempty"`
+
+	// QueriesBlocked is the number of DNS queries that were blocked (from pod 0)
+	// +optional
+	QueriesBlocked int64 `json:"queriesBlocked,omitempty"`
+
+	// BlockPercentage is the percentage of queries that were blocked, e.g. "9.99%"
+	// +optional
+	BlockPercentage string `json:"blockPercentage,omitempty"`
+
+	// GravityDomains is the number of domains in the gravity (blocklist) database (from pod 0)
+	// +optional
+	GravityDomains int64 `json:"gravityDomains,omitempty"`
+
+	// UniqueClients is the number of unique clients seen by Pi-hole (from pod 0)
+	// +optional
+	UniqueClients int32 `json:"uniqueClients,omitempty"`
+
+	// WebURL is the URL to access the Pi-hole web interface
+	// +optional
+	WebURL string `json:"webURL,omitempty"`
+
+	// DNSIP is the IP address of the DNS service (LoadBalancer IP or ClusterIP)
+	// +optional
+	DNSIP string `json:"dnsIP,omitempty"`
+
+	// StatsLastUpdated is the last time stats were fetched from Pi-hole
+	// +optional
+	StatsLastUpdated *metav1.Time `json:"statsLastUpdated,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Queries",type="integer",JSONPath=".status.queriesTotal",description="Total DNS queries",priority=1
+// +kubebuilder:printcolumn:name="Blocked",type="string",JSONPath=".status.blockPercentage",description="Percentage blocked",priority=1
+// +kubebuilder:printcolumn:name="Gravity",type="integer",JSONPath=".status.gravityDomains",description="Gravity domains",priority=1
+// +kubebuilder:printcolumn:name="DNS IP",type="string",JSONPath=".status.dnsIP",description="DNS service IP"
+// +kubebuilder:printcolumn:name="Web URL",type="string",JSONPath=".status.webURL",description="Web UI URL",priority=1
 
 // Pihole is the Schema for the piholes API
 type Pihole struct {

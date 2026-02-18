@@ -14,7 +14,32 @@ spec:
     singular: pihole
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Total DNS queries
+      jsonPath: .status.queriesTotal
+      name: Queries
+      priority: 1
+      type: integer
+    - description: Percentage blocked
+      jsonPath: .status.blockPercentage
+      name: Blocked
+      priority: 1
+      type: string
+    - description: Gravity domains
+      jsonPath: .status.gravityDomains
+      name: Gravity
+      priority: 1
+      type: integer
+    - description: DNS service IP
+      jsonPath: .status.dnsIP
+      name: DNS IP
+      type: string
+    - description: Web UI URL
+      jsonPath: .status.webURL
+      name: Web URL
+      priority: 1
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Pihole is the Schema for the piholes API
@@ -219,6 +244,10 @@ spec:
                 description: AdminPasswordSecret is the name of the secret containing
                   the admin password
                 type: string
+              blockPercentage:
+                description: BlockPercentage is the percentage of queries that were
+                  blocked, e.g. "9.99%"
+                type: string
               conditions:
                 description: Conditions represent the latest available observations
                   of an object's state
@@ -277,6 +306,25 @@ spec:
                   - type
                   type: object
                 type: array
+              dnsIP:
+                description: DNSIP is the IP address of the DNS service (LoadBalancer
+                  IP or ClusterIP)
+                type: string
+              gravityDomains:
+                description: GravityDomains is the number of domains in the gravity
+                  (blocklist) database (from pod 0)
+                format: int64
+                type: integer
+              queriesBlocked:
+                description: QueriesBlocked is the number of DNS queries that were
+                  blocked (from pod 0)
+                format: int64
+                type: integer
+              queriesTotal:
+                description: QueriesTotal is the total number of DNS queries processed
+                  (from pod 0)
+                format: int64
+                type: integer
               readyReplicas:
                 description: ReadyReplicas is the number of ready replicas
                 format: int32
@@ -284,6 +332,19 @@ spec:
               serviceName:
                 description: ServiceName is the name of the service created for this
                   Pi-hole instance
+                type: string
+              statsLastUpdated:
+                description: StatsLastUpdated is the last time stats were fetched
+                  from Pi-hole
+                format: date-time
+                type: string
+              uniqueClients:
+                description: UniqueClients is the number of unique clients seen by
+                  Pi-hole (from pod 0)
+                format: int32
+                type: integer
+              webURL:
+                description: WebURL is the URL to access the Pi-hole web interface
                 type: string
             type: object
         required:

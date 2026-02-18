@@ -1,0 +1,31 @@
+apiVersion: pihole-operator.org/v1alpha1
+kind: Pihole
+metadata:
+  name: my-pihole
+  namespace: default
+spec:
+  size: 1
+  timezone: "America/New_York"
+  dnsServiceType: NodePort
+  webServiceType: ClusterIP
+
+# After the operator reconciles, status will be enriched with live stats
+# fetched from pod 0 via the Pi-hole API (/api/stats/summary).
+# Example status:
+#
+# status:
+#   adminPasswordSecret: my-pihole-admin
+#   serviceName: my-pihole
+#   readyReplicas: 1
+#   dnsIP: 10.96.0.53          # ClusterIP of the DNS service (or LB IP)
+#   webURL: http://10.96.0.80/admin  # URL to the Pi-hole web interface
+#   queriesTotal: 48291         # Total DNS queries processed (from pod 0)
+#   queriesBlocked: 4723        # Queries blocked by Pi-hole
+#   blockPercentage: "9.78%"   # Percentage of queries blocked
+#   gravityDomains: 150283      # Domains in the gravity (blocklist) database
+#   uniqueClients: 12           # Unique clients seen by Pi-hole
+#   statsLastUpdated: "2026-02-18T19:00:00Z"
+#   conditions:
+#     - type: Available
+#       status: "True"
+#       reason: Reconciling
