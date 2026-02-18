@@ -32,17 +32,20 @@ type SecretKeyRef struct {
 	Key string `json:"key,omitempty"`
 }
 
-// PiholeAPITLSConfig defines TLS settings for Pi-hole API communication
+// PiholeAPITLSConfig defines TLS verification settings for Pi-hole API communication
 type PiholeAPITLSConfig struct {
-	// InsecureSkipVerify disables TLS certificate verification.
-	// Defaults to true because Pi-hole typically uses self-signed certificates.
-	// Set to false when providing a trusted CA certificate via CASecretRef.
+	// Enabled controls whether TLS certificate verification is performed.
+	// When false (default), certificate verification is skipped — suitable for
+	// Pi-hole's default self-signed certificates.
+	// When true, certificates are verified against the system CA pool or
+	// the CA provided via CASecretRef.
 	// +optional
-	// +kubebuilder:default=true
-	InsecureSkipVerify *bool `json:"insecureSkipVerify,omitempty"`
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
 
-	// CASecretRef references a Secret containing a CA certificate under the key "ca.crt".
-	// Used to verify Pi-hole's TLS certificate when InsecureSkipVerify is false.
+	// CASecretRef references a Secret containing a CA certificate (key: "ca.crt")
+	// used to verify Pi-hole's TLS certificate. Only effective when Enabled is true.
+	// If Enabled is true and CASecretRef is not set, the system CA pool is used.
 	// +optional
 	CASecretRef *SecretKeyRef `json:"caSecretRef,omitempty"`
 }

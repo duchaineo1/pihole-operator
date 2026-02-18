@@ -27,23 +27,24 @@ type PiholeAPIClient struct {
 }
 
 // buildTLSConfig constructs a *tls.Config from a PiholeAPITLSConfig and optional CA PEM bytes.
-// When cfg is nil or InsecureSkipVerify is nil/true, returns a config that skips verification
-// (backward-compatible default, because Pi-hole uses self-signed certs).
+//
+// Semantics:
+//   - cfg nil OR cfg.Enabled == false → InsecureSkipVerify: true (default, Pi-hole self-signed certs)
+//   - cfg.Enabled == true, no caData  → InsecureSkipVerify: false, system CA pool
+//   - cfg.Enabled == true, caData set → InsecureSkipVerify: false, custom CA pool
 func buildTLSConfig(cfg *v1alpha1.PiholeAPITLSConfig, caData []byte) *tls.Config {
-	// Default: skip verification
-	insecure := true
-	if cfg != nil && cfg.InsecureSkipVerify != nil {
-		insecure = *cfg.InsecureSkipVerify
+	// Default: skip verification (backward-compatible, Pi-hole uses self-signed certs)
+	if cfg == nil || !cfg.Enabled {
+		return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // intentional default for self-signed certs
 	}
 
-	tlsCfg := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // configurable per spec
-
-	if !insecure && len(caData) > 0 {
+	// TLS verification enabled
+	tlsCfg := &tls.Config{InsecureSkipVerify: false}
+	if len(caData) > 0 {
 		pool := x509.NewCertPool()
 		pool.AppendCertsFromPEM(caData)
 		tlsCfg.RootCAs = pool
 	}
-
 	return tlsCfg
 }
 

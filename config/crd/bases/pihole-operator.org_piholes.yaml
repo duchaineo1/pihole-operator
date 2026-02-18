@@ -222,8 +222,9 @@ spec:
                 properties:
                   caSecretRef:
                     description: |-
-                      CASecretRef references a Secret containing a CA certificate under the key "ca.crt".
-                      Used to verify Pi-hole's TLS certificate when InsecureSkipVerify is false.
+                      CASecretRef references a Secret containing a CA certificate (key: "ca.crt")
+                      used to verify Pi-hole's TLS certificate. Only effective when Enabled is true.
+                      If Enabled is true and CASecretRef is not set, the system CA pool is used.
                     properties:
                       key:
                         default: password
@@ -235,12 +236,14 @@ spec:
                     required:
                     - name
                     type: object
-                  insecureSkipVerify:
-                    default: true
+                  enabled:
+                    default: false
                     description: |-
-                      InsecureSkipVerify disables TLS certificate verification.
-                      Defaults to true because Pi-hole typically uses self-signed certificates.
-                      Set to false when providing a trusted CA certificate via CASecretRef.
+                      Enabled controls whether TLS certificate verification is performed.
+                      When false (default), certificate verification is skipped — suitable for
+                      Pi-hole's default self-signed certificates.
+                      When true, certificates are verified against the system CA pool or
+                      the CA provided via CASecretRef.
                     type: boolean
                 type: object
               upstreamDNS:
