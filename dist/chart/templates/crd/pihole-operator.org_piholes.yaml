@@ -19,13 +19,14 @@ spec:
       jsonPath: .status.readyReplicas
       name: Ready
       type: integer
-    - description: DNS service IP
-      jsonPath: .status.dnsIP
-      name: DNS IP
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - description: DNS service IP
+      jsonPath: .status.dnsIP
+      name: DNS IP
+      priority: 1
+      type: string
     - description: Web UI URL
       jsonPath: .status.webURL
       name: Web URL
@@ -41,9 +42,9 @@ spec:
       name: Blocked
       priority: 1
       type: string
-    - description: Gravity domains
+    - description: Total domains in blocklists
       jsonPath: .status.gravityDomains
-      name: Gravity
+      name: Blocked Domains
       priority: 1
       type: integer
     name: v1alpha1

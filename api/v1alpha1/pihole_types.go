@@ -190,12 +190,12 @@ type PiholeStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type="integer",JSONPath=".status.readyReplicas",description="Number of ready replicas"
-// +kubebuilder:printcolumn:name="DNS IP",type="string",JSONPath=".status.dnsIP",description="DNS service IP"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="DNS IP",type="string",JSONPath=".status.dnsIP",description="DNS service IP",priority=1
 // +kubebuilder:printcolumn:name="Web URL",type="string",JSONPath=".status.webURL",description="Web UI URL",priority=1
 // +kubebuilder:printcolumn:name="Queries",type="integer",JSONPath=".status.queriesTotal",description="Total DNS queries",priority=1
 // +kubebuilder:printcolumn:name="Blocked",type="string",JSONPath=".status.blockPercentage",description="Percentage blocked",priority=1
-// +kubebuilder:printcolumn:name="Gravity",type="integer",JSONPath=".status.gravityDomains",description="Gravity domains",priority=1
+// +kubebuilder:printcolumn:name="Blocked Domains",type="integer",JSONPath=".status.gravityDomains",description="Total domains in blocklists",priority=1
 
 // Pihole is the Schema for the piholes API
 type Pihole struct {
