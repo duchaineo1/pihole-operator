@@ -222,18 +222,21 @@ spec:
                 properties:
                   caSecretRef:
                     description: |-
-                      CASecretRef references a Secret containing a CA certificate (key: "ca.crt")
-                      used to verify Pi-hole's TLS certificate. Only effective when Enabled is true.
-                      If Enabled is true and CASecretRef is not set, the system CA pool is used.
+                      CASecretRef references a Secret containing a CA certificate used to verify
+                      Pi-hole's TLS certificate. Only needed when Enabled is true and the cert is
+                      signed by a private or internal CA (not in the system CA pool).
+                      The key field is required — specify whichever key in the Secret holds the
+                      PEM-encoded CA certificate (e.g. "ca.crt", "tls.crt").
                     properties:
                       key:
-                        default: password
-                        description: Key is the key within the secret to use
+                        description: Key is the key within the Secret that contains
+                          the CA certificate PEM data
                         type: string
                       name:
-                        description: Name is the name of the secret
+                        description: Name is the name of the Secret
                         type: string
                     required:
+                    - key
                     - name
                     type: object
                   enabled:
@@ -242,8 +245,10 @@ spec:
                       Enabled controls whether TLS certificate verification is performed.
                       When false (default), certificate verification is skipped — suitable for
                       Pi-hole's default self-signed certificates.
-                      When true, certificates are verified against the system CA pool or
-                      the CA provided via CASecretRef.
+                      When true, the certificate is verified. For certs signed by a public CA
+                      (e.g. Let's Encrypt, GoDaddy) no further config is needed — the system
+                      CA pool is used automatically. For private or internal CAs, provide the
+                      CA certificate via CASecretRef.
                     type: boolean
                 type: object
               upstreamDNS:

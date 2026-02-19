@@ -62,22 +62,19 @@ func buildHTTPClient(tlsCfg *tls.Config) *http.Client {
 }
 
 // getCAData reads the CA certificate bytes from the secret referenced in cfg.
-// Returns nil if cfg is nil, CASecretRef is nil, or the secret doesn't have the key.
+// Returns nil if cfg is nil or CASecretRef is nil (no CA configured).
+// The key field on CASecretRef is required — no default is applied.
 func getCAData(ctx context.Context, c client.Client, namespace string, cfg *v1alpha1.PiholeAPITLSConfig) ([]byte, error) {
 	if cfg == nil || cfg.CASecretRef == nil {
 		return nil, nil
 	}
 	secret := &corev1.Secret{}
-	key := cfg.CASecretRef.Key
-	if key == "" {
-		key = "ca.crt"
-	}
 	if err := c.Get(ctx, types.NamespacedName{Name: cfg.CASecretRef.Name, Namespace: namespace}, secret); err != nil {
 		return nil, fmt.Errorf("failed to get CA secret %q: %w", cfg.CASecretRef.Name, err)
 	}
-	data, ok := secret.Data[key]
+	data, ok := secret.Data[cfg.CASecretRef.Key]
 	if !ok {
-		return nil, fmt.Errorf("key %q not found in secret %q", key, cfg.CASecretRef.Name)
+		return nil, fmt.Errorf("key %q not found in CA secret %q", cfg.CASecretRef.Key, cfg.CASecretRef.Name)
 	}
 	return data, nil
 }

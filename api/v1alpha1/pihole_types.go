@@ -21,6 +21,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// CASecretKeyRef references a key within a Secret containing a CA certificate.
+// Unlike SecretKeyRef, the key field is required — there is no sensible default
+// for a CA certificate key name.
+type CASecretKeyRef struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key is the key within the Secret that contains the CA certificate PEM data
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
+}
+
 // SecretKeyRef references a key within an existing Secret.
 type SecretKeyRef struct {
 	// Name is the name of the secret
@@ -37,17 +50,21 @@ type PiholeAPITLSConfig struct {
 	// Enabled controls whether TLS certificate verification is performed.
 	// When false (default), certificate verification is skipped — suitable for
 	// Pi-hole's default self-signed certificates.
-	// When true, certificates are verified against the system CA pool or
-	// the CA provided via CASecretRef.
+	// When true, the certificate is verified. For certs signed by a public CA
+	// (e.g. Let's Encrypt, GoDaddy) no further config is needed — the system
+	// CA pool is used automatically. For private or internal CAs, provide the
+	// CA certificate via CASecretRef.
 	// +optional
 	// +kubebuilder:default=false
 	Enabled bool `json:"enabled,omitempty"`
 
-	// CASecretRef references a Secret containing a CA certificate (key: "ca.crt")
-	// used to verify Pi-hole's TLS certificate. Only effective when Enabled is true.
-	// If Enabled is true and CASecretRef is not set, the system CA pool is used.
+	// CASecretRef references a Secret containing a CA certificate used to verify
+	// Pi-hole's TLS certificate. Only needed when Enabled is true and the cert is
+	// signed by a private or internal CA (not in the system CA pool).
+	// The key field is required — specify whichever key in the Secret holds the
+	// PEM-encoded CA certificate (e.g. "ca.crt", "tls.crt").
 	// +optional
-	CASecretRef *SecretKeyRef `json:"caSecretRef,omitempty"`
+	CASecretRef *CASecretKeyRef `json:"caSecretRef,omitempty"`
 }
 
 // PiholeSpec defines the desired state of Pihole
