@@ -196,6 +196,33 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              serverTLS:
+                description: |-
+                  ServerTLS configures a TLS certificate for Pi-hole's own HTTPS endpoint.
+                  When set, the referenced Secret is mounted into the Pi-hole container and
+                  Pi-hole is configured to serve TLS using that certificate.
+                  Pairs with spec.tls for full end-to-end TLS configuration.
+                properties:
+                  certKey:
+                    default: tls.crt
+                    description: |-
+                      CertKey is the key within the Secret that holds the PEM-encoded certificate (chain).
+                      Defaults to "tls.crt".
+                    type: string
+                  keyKey:
+                    default: tls.key
+                    description: |-
+                      KeyKey is the key within the Secret that holds the PEM-encoded private key.
+                      Defaults to "tls.key".
+                    type: string
+                  secretName:
+                    description: |-
+                      SecretName is the name of a Secret in the same namespace containing the TLS certificate
+                      and private key. Typically created by cert-manager or kubectl create secret tls.
+                    type: string
+                required:
+                - secretName
+                type: object
               size:
                 default: 1
                 description: |-

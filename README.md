@@ -60,6 +60,7 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `upstreamDNS` | Pi-hole defaults | List of upstream DNS servers (e.g. `["1.1.1.1", "9.9.9.9"]`) |
 | `ingress` | — | Ingress configuration for the web UI (see below) |
 | `tls` | — | TLS verification settings for Pi-hole API communication (see below) |
+| `serverTLS` | — | TLS certificate for Pi-hole's own HTTPS endpoint (see below) |
 
 #### Status fields
 
@@ -210,6 +211,40 @@ The referenced Secret must exist in the same namespace as the `Pihole` resource 
 | `tls.insecureSkipVerify` | `true` | Skip TLS certificate verification |
 | `tls.caSecretRef.name` | — | Name of the Secret containing the CA certificate |
 | `tls.caSecretRef.key` | `ca.crt` | Key within the Secret |
+
+#### Server TLS (`spec.serverTLS`)
+
+To have Pi-hole serve your own TLS certificate on its HTTPS endpoint:
+
+```yaml
+spec:
+  serverTLS:
+    secretName: pihole-tls   # standard k8s TLS secret
+    # certKey: tls.crt       # defaults to tls.crt
+    # keyKey: tls.key        # defaults to tls.key
+```
+
+Works with cert-manager: create a `Certificate` resource targeting the Pi-hole service,
+then reference the resulting secret here.
+
+Pair with `spec.tls` for full end-to-end verification:
+
+```yaml
+spec:
+  serverTLS:
+    secretName: pihole-tls
+  tls:
+    enabled: true            # public CA: no caSecretRef needed
+    # caSecretRef:           # private CA: provide your CA cert
+    #   name: my-ca
+    #   key: ca.crt
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `serverTLS.secretName` | — | Name of the Secret containing the TLS certificate and key |
+| `serverTLS.certKey` | `tls.crt` | Key within the Secret holding the PEM certificate chain |
+| `serverTLS.keyKey` | `tls.key` | Key within the Secret holding the PEM private key |
 
 ### Blocklist
 

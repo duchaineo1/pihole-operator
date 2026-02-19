@@ -16,6 +16,11 @@ spec:
   #     name: pihole-ca-cert       # Secret containing key "ca.crt" with the CA PEM
   #     key: ca.crt                # Optional — defaults to "ca.crt"
 
+  # serverTLS:
+  #   secretName: pihole-tls        # TLS Secret (tls.crt + tls.key)
+  #   certKey: tls.crt              # optional, defaults to tls.crt
+  #   keyKey: tls.key               # optional, defaults to tls.key
+
 # After the operator reconciles, status will be enriched with live stats
 # fetched from pod 0 via the Pi-hole API (/api/stats/summary).
 # Example status:
