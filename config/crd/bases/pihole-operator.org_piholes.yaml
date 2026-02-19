@@ -15,6 +15,22 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - description: Number of ready replicas
+      jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - description: DNS service IP
+      jsonPath: .status.dnsIP
+      name: DNS IP
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: Web UI URL
+      jsonPath: .status.webURL
+      name: Web URL
+      priority: 1
+      type: string
     - description: Total DNS queries
       jsonPath: .status.queriesTotal
       name: Queries
@@ -30,15 +46,6 @@ spec:
       name: Gravity
       priority: 1
       type: integer
-    - description: DNS service IP
-      jsonPath: .status.dnsIP
-      name: DNS IP
-      type: string
-    - description: Web UI URL
-      jsonPath: .status.webURL
-      name: Web URL
-      priority: 1
-      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
