@@ -3,7 +3,6 @@ package controller
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,10 +33,9 @@ const (
 // BlocklistReconciler reconciles a Blocklist object
 type BlocklistReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	httpClient *http.Client
-	sidCache   map[string]*cachedSID
-	mu         sync.Mutex
+	Scheme   *runtime.Scheme
+	sidCache map[string]*cachedSID
+	mu       sync.Mutex
 
 	// BaseURLOverride maps "namespace/name" to a base URL. Used in tests to
 	// point at an httptest server instead of the in-cluster service URL.
@@ -84,22 +82,18 @@ type PiholeListsWrapper struct {
 
 // Init initializes the reconciler
 func (r *BlocklistReconciler) Init() {
-	if r.httpClient == nil {
-		r.httpClient = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, // Pi-hole uses self-signed certs
-				},
-				MaxIdleConns:        10,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		}
-	}
 	if r.sidCache == nil {
 		r.sidCache = make(map[string]*cachedSID)
 	}
+}
+
+// httpClientForPihole builds a per-Pihole HTTP client using TLS config from the spec.
+func (r *BlocklistReconciler) httpClientForPihole(ctx context.Context, pihole *cachev1alpha1.Pihole) (*http.Client, error) {
+	caData, err := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
+	if err != nil {
+		return nil, err
+	}
+	return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData)), nil
 }
 
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
@@ -151,6 +145,12 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					continue
 				}
 
+				httpClient, err := r.httpClientForPihole(ctx, &pihole)
+				if err != nil {
+					log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+					continue
+				}
+
 				replicas := int32(1)
 				if pihole.Spec.Size != nil {
 					replicas = *pihole.Spec.Size
@@ -165,7 +165,7 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 						baseURL = override
 					}
 
-					if err := r.removeBlocklistFromPod(ctx, baseURL, password, cacheKey, blocklist, log); err != nil {
+					if err := r.removeBlocklistFromPod(ctx, httpClient, baseURL, password, cacheKey, blocklist, log); err != nil {
 						log.Error(err, "Failed to remove blocklist", "pihole", pihole.Name, "pod", i)
 					}
 				}
@@ -208,6 +208,13 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			continue
 		}
 
+		httpClient, err := r.httpClientForPihole(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+			lastError = err
+			continue
+		}
+
 		replicas := int32(1)
 		if pihole.Spec.Size != nil {
 			replicas = *pihole.Spec.Size
@@ -222,7 +229,7 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				baseURL = override
 			}
 
-			if err := r.applyBlocklistToPod(ctx, baseURL, password, cacheKey, blocklist, log); err != nil {
+			if err := r.applyBlocklistToPod(ctx, httpClient, baseURL, password, cacheKey, blocklist, log); err != nil {
 				log.Error(err, "Failed to apply blocklist", "pihole", pihole.Name, "pod", i)
 				lastError = err
 			} else {
@@ -257,7 +264,7 @@ func (r *BlocklistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // authenticatePihole authenticates with Pi-hole and returns a session ID
-func (r *BlocklistReconciler) authenticatePihole(ctx context.Context, baseURL, password string, log logr.Logger) (string, error) {
+func (r *BlocklistReconciler) authenticatePihole(ctx context.Context, httpClient *http.Client, baseURL, password string, log logr.Logger) (string, error) {
 	authURL := fmt.Sprintf("%s/api/auth", baseURL)
 
 	authReq := map[string]string{"password": password}
@@ -276,7 +283,7 @@ func (r *BlocklistReconciler) authenticatePihole(ctx context.Context, baseURL, p
 
 	log.Info("Authenticating with Pi-hole", "url", authURL)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("auth request failed: %w", err)
 	}
@@ -307,7 +314,7 @@ func (r *BlocklistReconciler) authenticatePihole(ctx context.Context, baseURL, p
 }
 
 // getSID gets or refreshes a session ID
-func (r *BlocklistReconciler) getSID(ctx context.Context, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
+func (r *BlocklistReconciler) getSID(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -321,7 +328,7 @@ func (r *BlocklistReconciler) getSID(ctx context.Context, baseURL, password, cac
 	}
 
 	// Authenticate
-	sid, err := r.authenticatePihole(ctx, baseURL, password, log)
+	sid, err := r.authenticatePihole(ctx, httpClient, baseURL, password, log)
 	if err != nil {
 		return "", err
 	}
@@ -361,15 +368,15 @@ func (r *BlocklistReconciler) getPiholePassword(ctx context.Context, pihole *cac
 	return password, nil
 }
 
-func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
+func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	// Get session
-	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
+	sid, err := r.getSID(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return fmt.Errorf("failed to get SID: %w", err)
 	}
 
 	// Get existing lists
-	existingLists, err := r.getBlocklists(ctx, baseURL, sid, log)
+	existingLists, err := r.getBlocklists(ctx, httpClient, baseURL, sid, log)
 	if err != nil {
 		log.Error(err, "Failed to get existing lists, will try to add anyway")
 		existingLists = []PiholeListResponse{}
@@ -390,7 +397,7 @@ func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, baseURL, 
 				// Check if we need to update enabled status
 				if existing.Enabled != blocklist.Spec.Enabled {
 					log.Info("Updating blocklist enabled status", "source", source, "enabled", blocklist.Spec.Enabled)
-					if err := r.updateBlocklistSource(ctx, baseURL, sid, existing.ID, source, blocklist, log); err != nil {
+					if err := r.updateBlocklistSource(ctx, httpClient, baseURL, sid, existing.ID, source, blocklist, log); err != nil {
 						log.Error(err, "Failed to update blocklist", "source", source)
 					} else {
 						modified = true
@@ -401,7 +408,7 @@ func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, baseURL, 
 		}
 
 		if !found {
-			if err := r.addBlocklistSource(ctx, baseURL, sid, source, blocklist, log); err != nil {
+			if err := r.addBlocklistSource(ctx, httpClient, baseURL, sid, source, blocklist, log); err != nil {
 				return fmt.Errorf("failed to add source %s: %w", source, err)
 			}
 			modified = true
@@ -410,7 +417,7 @@ func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, baseURL, 
 
 	// Reload gravity if we made changes
 	if modified {
-		if err := r.reloadGravity(ctx, baseURL, sid, log); err != nil {
+		if err := r.reloadGravity(ctx, httpClient, baseURL, sid, log); err != nil {
 			return fmt.Errorf("failed to reload gravity: %w", err)
 		}
 	} else {
@@ -421,7 +428,7 @@ func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, baseURL, 
 }
 
 // getBlocklists retrieves current blocklists from Pi-hole
-func (r *BlocklistReconciler) getBlocklists(ctx context.Context, baseURL, sid string, log logr.Logger) ([]PiholeListResponse, error) {
+func (r *BlocklistReconciler) getBlocklists(ctx context.Context, httpClient *http.Client, baseURL, sid string, log logr.Logger) ([]PiholeListResponse, error) {
 	url := fmt.Sprintf("%s/api/lists?type=block", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -432,7 +439,7 @@ func (r *BlocklistReconciler) getBlocklists(ctx context.Context, baseURL, sid st
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", sid)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +469,7 @@ func (r *BlocklistReconciler) getBlocklists(ctx context.Context, baseURL, sid st
 }
 
 // addBlocklistSource adds a single blocklist source
-func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, baseURL, sid, source string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
+func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, httpClient *http.Client, baseURL, sid, source string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	url := fmt.Sprintf("%s/api/lists?type=block", baseURL)
 
 	listReq := PiholeListRequest{
@@ -488,7 +495,7 @@ func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, baseURL, s
 
 	log.Info("Adding blocklist source", "source", source)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -511,7 +518,7 @@ func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, baseURL, s
 }
 
 // updateBlocklistSource updates an existing blocklist source
-func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, baseURL, sid string, listID int, source string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
+func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, httpClient *http.Client, baseURL, sid string, listID int, source string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	url := fmt.Sprintf("%s/api/lists/%d", baseURL, listID)
 
 	listReq := PiholeListRequest{
@@ -535,7 +542,7 @@ func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, baseURL
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", sid)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -552,7 +559,7 @@ func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, baseURL
 }
 
 // reloadGravity triggers Pi-hole gravity to update blocklists
-func (r *BlocklistReconciler) reloadGravity(ctx context.Context, baseURL, sid string, log logr.Logger) error {
+func (r *BlocklistReconciler) reloadGravity(ctx context.Context, httpClient *http.Client, baseURL, sid string, log logr.Logger) error {
 	url := fmt.Sprintf("%s/api/action/gravity", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
@@ -565,7 +572,7 @@ func (r *BlocklistReconciler) reloadGravity(ctx context.Context, baseURL, sid st
 
 	log.Info("Triggering gravity reload")
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("gravity request failed: %w", err)
 	}
@@ -582,14 +589,14 @@ func (r *BlocklistReconciler) reloadGravity(ctx context.Context, baseURL, sid st
 }
 
 // removeBlocklistFromPod removes blocklist sources from a single Pi-hole pod
-func (r *BlocklistReconciler) removeBlocklistFromPod(ctx context.Context, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
-	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
+func (r *BlocklistReconciler) removeBlocklistFromPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
+	sid, err := r.getSID(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return fmt.Errorf("failed to get SID: %w", err)
 	}
 
 	// Get existing lists
-	existingLists, err := r.getBlocklists(ctx, baseURL, sid, log)
+	existingLists, err := r.getBlocklists(ctx, httpClient, baseURL, sid, log)
 	if err != nil {
 		return fmt.Errorf("failed to get lists: %w", err)
 	}
@@ -605,7 +612,7 @@ func (r *BlocklistReconciler) removeBlocklistFromPod(ctx context.Context, baseUR
 				req, _ := http.NewRequestWithContext(ctx, "DELETE", deleteURL, nil)
 				req.Header.Set("X-FTL-SID", sid)
 
-				resp, err := r.httpClient.Do(req)
+				resp, err := httpClient.Do(req)
 				if err != nil {
 					log.Error(err, "Failed to delete", "source", source)
 					continue
@@ -620,7 +627,7 @@ func (r *BlocklistReconciler) removeBlocklistFromPod(ctx context.Context, baseUR
 
 	// Reload gravity if we deleted anything
 	if deleted {
-		if err := r.reloadGravity(ctx, baseURL, sid, log); err != nil {
+		if err := r.reloadGravity(ctx, httpClient, baseURL, sid, log); err != nil {
 			log.Error(err, "Failed to reload gravity after deletion")
 			// Don't fail the deletion if gravity reload fails
 		}

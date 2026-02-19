@@ -1301,4 +1301,212 @@ var _ = Describe("Pihole Controller", func() {
 			Expect(pihole.Status.StatsLastUpdated).NotTo(BeNil())
 		})
 	})
+
+	// ---------------------------------------------------------------
+	// ServerTLS tests
+	// ---------------------------------------------------------------
+	Context("ServerTLS - default key names", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			// Create a fake TLS secret
+			tlsSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pihole-tls",
+					Namespace: "default",
+				},
+				Type: corev1.SecretTypeTLS,
+				Data: map[string][]byte{
+					"tls.crt": []byte("fake-cert"),
+					"tls.key": []byte("fake-key"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, tlsSecret)).To(Succeed())
+
+			nn = createPihole("test-servertls", cachev1alpha1.PiholeSpec{
+				ServerTLS: &cachev1alpha1.PiholeServerTLSConfig{
+					SecretName: "pihole-tls",
+				},
+			})
+		})
+		AfterEach(func() {
+			deletePihole(nn)
+			tlsSecret := &corev1.Secret{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pihole-tls", Namespace: "default"}, tlsSecret); err == nil {
+				_ = k8sClient.Delete(ctx, tlsSecret)
+			}
+		})
+
+		It("should mount the TLS secret as a volume and set FTLCONF env vars", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			// Check volume exists
+			var serverTLSVol *corev1.Volume
+			for i := range sts.Spec.Template.Spec.Volumes {
+				if sts.Spec.Template.Spec.Volumes[i].Name == "server-tls" {
+					serverTLSVol = &sts.Spec.Template.Spec.Volumes[i]
+					break
+				}
+			}
+			Expect(serverTLSVol).NotTo(BeNil(), "server-tls volume should exist")
+			Expect(serverTLSVol.VolumeSource.Secret).NotTo(BeNil())
+			Expect(serverTLSVol.VolumeSource.Secret.SecretName).To(Equal("pihole-tls"))
+
+			// Check volumeMount exists
+			var serverTLSMount *corev1.VolumeMount
+			for i := range sts.Spec.Template.Spec.Containers[0].VolumeMounts {
+				if sts.Spec.Template.Spec.Containers[0].VolumeMounts[i].Name == "server-tls" {
+					serverTLSMount = &sts.Spec.Template.Spec.Containers[0].VolumeMounts[i]
+					break
+				}
+			}
+			Expect(serverTLSMount).NotTo(BeNil(), "server-tls volumeMount should exist")
+			Expect(serverTLSMount.MountPath).To(Equal("/etc/pihole/tls"))
+			Expect(serverTLSMount.ReadOnly).To(BeTrue())
+
+			// Check env vars
+			var certPath, keyPath string
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_webserver_tls_cert" {
+					certPath = e.Value
+				}
+				if e.Name == "FTLCONF_webserver_tls_key" {
+					keyPath = e.Value
+				}
+			}
+			Expect(certPath).To(Equal("/etc/pihole/tls/tls.crt"))
+			Expect(keyPath).To(Equal("/etc/pihole/tls/tls.key"))
+		})
+	})
+
+	Context("ServerTLS - custom key names", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			tlsSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "my-tls",
+					Namespace: "default",
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					"cert.pem": []byte("fake-cert"),
+					"key.pem":  []byte("fake-key"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, tlsSecret)).To(Succeed())
+
+			nn = createPihole("test-servertls-custom", cachev1alpha1.PiholeSpec{
+				ServerTLS: &cachev1alpha1.PiholeServerTLSConfig{
+					SecretName: "my-tls",
+					CertKey:    "cert.pem",
+					KeyKey:     "key.pem",
+				},
+			})
+		})
+		AfterEach(func() {
+			deletePihole(nn)
+			tlsSecret := &corev1.Secret{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "my-tls", Namespace: "default"}, tlsSecret); err == nil {
+				_ = k8sClient.Delete(ctx, tlsSecret)
+			}
+		})
+
+		It("should use custom certKey and keyKey in FTLCONF env vars", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			var certPath, keyPath string
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_webserver_tls_cert" {
+					certPath = e.Value
+				}
+				if e.Name == "FTLCONF_webserver_tls_key" {
+					keyPath = e.Value
+				}
+			}
+			Expect(certPath).To(Equal("/etc/pihole/tls/cert.pem"))
+			Expect(keyPath).To(Equal("/etc/pihole/tls/key.pem"))
+		})
+	})
+
+	Context("ServerTLS - drift detection", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			tlsSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pihole-tls-drift",
+					Namespace: "default",
+				},
+				Type: corev1.SecretTypeTLS,
+				Data: map[string][]byte{
+					"tls.crt": []byte("fake-cert"),
+					"tls.key": []byte("fake-key"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, tlsSecret)).To(Succeed())
+
+			nn = createPihole("test-servertls-drift", cachev1alpha1.PiholeSpec{
+				ServerTLS: &cachev1alpha1.PiholeServerTLSConfig{
+					SecretName: "pihole-tls-drift",
+				},
+			})
+		})
+		AfterEach(func() {
+			deletePihole(nn)
+			tlsSecret := &corev1.Secret{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: "pihole-tls-drift", Namespace: "default"}, tlsSecret); err == nil {
+				_ = k8sClient.Delete(ctx, tlsSecret)
+			}
+		})
+
+		It("should remove server-tls volume and env vars when serverTLS is cleared", func() {
+			// First reconcile: create with serverTLS
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			// Verify volume is present initially
+			found := false
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				if v.Name == "server-tls" {
+					found = true
+				}
+			}
+			Expect(found).To(BeTrue(), "server-tls volume should exist initially")
+
+			// Clear serverTLS from spec
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.ServerTLS = nil
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeTrue())
+
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			// Volume should be gone
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				Expect(v.Name).NotTo(Equal("server-tls"), "server-tls volume should be removed")
+			}
+
+			// Env vars should be gone
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				Expect(e.Name).NotTo(Equal("FTLCONF_webserver_tls_cert"), "FTLCONF_webserver_tls_cert should be removed")
+				Expect(e.Name).NotTo(Equal("FTLCONF_webserver_tls_key"), "FTLCONF_webserver_tls_key should be removed")
+			}
+		})
+	})
 })

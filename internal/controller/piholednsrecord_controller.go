@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"sync"
@@ -32,10 +31,9 @@ const (
 // PiholeDNSRecordReconciler reconciles a PiholeDNSRecord object
 type PiholeDNSRecordReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	httpClient *http.Client
-	sidCache   map[string]*cachedSID
-	mu         sync.Mutex
+	Scheme   *runtime.Scheme
+	sidCache map[string]*cachedSID
+	mu       sync.Mutex
 
 	// BaseURLOverride maps "namespace/name" to a base URL. Used in tests.
 	BaseURLOverride map[string]string
@@ -43,22 +41,18 @@ type PiholeDNSRecordReconciler struct {
 
 // Init initializes the reconciler
 func (r *PiholeDNSRecordReconciler) Init() {
-	if r.httpClient == nil {
-		r.httpClient = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
-				MaxIdleConns:        10,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		}
-	}
 	if r.sidCache == nil {
 		r.sidCache = make(map[string]*cachedSID)
 	}
+}
+
+// httpClientForPihole builds a per-Pihole HTTP client using TLS config from the spec.
+func (r *PiholeDNSRecordReconciler) httpClientForPihole(ctx context.Context, pihole *cachev1alpha1.Pihole) (*http.Client, error) {
+	caData, err := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
+	if err != nil {
+		return nil, err
+	}
+	return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData)), nil
 }
 
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete
@@ -122,6 +116,12 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 					continue
 				}
 
+				httpClient, err := r.httpClientForPihole(ctx, &pihole)
+				if err != nil {
+					log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+					continue
+				}
+
 				replicas := int32(1)
 				if pihole.Spec.Size != nil {
 					replicas = *pihole.Spec.Size
@@ -136,7 +136,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 						baseURL = override
 					}
 
-					if err := r.removeDNSRecordFromPod(ctx, baseURL, password, cacheKey, dnsRecord, log); err != nil {
+					if err := r.removeDNSRecordFromPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord, log); err != nil {
 						log.Error(err, "Failed to remove DNS record", "pihole", pihole.Name, "pod", i)
 					}
 				}
@@ -184,6 +184,12 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				continue
 			}
 
+			httpClient, err := r.httpClientForPihole(ctx, &pihole)
+			if err != nil {
+				log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+				continue
+			}
+
 			replicas := int32(1)
 			if pihole.Spec.Size != nil {
 				replicas = *pihole.Spec.Size
@@ -198,7 +204,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 					baseURL = override
 				}
 
-				if err := r.removeEntryFromPod(ctx, baseURL, password, cacheKey, dnsRecord.Spec.RecordType, lastApplied, log); err != nil {
+				if err := r.removeEntryFromPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord.Spec.RecordType, lastApplied, log); err != nil {
 					log.Error(err, "Failed to remove old DNS entry", "pihole", pihole.Name, "pod", i, "entry", lastApplied)
 				}
 			}
@@ -212,6 +218,13 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		password, err := r.getPiholePassword(ctx, &pihole)
 		if err != nil {
 			log.Error(err, "Failed to get password", "pihole", pihole.Name)
+			lastError = err
+			continue
+		}
+
+		httpClient, err := r.httpClientForPihole(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
 			lastError = err
 			continue
 		}
@@ -230,7 +243,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				baseURL = override
 			}
 
-			if err := r.applyDNSRecordToPod(ctx, baseURL, password, cacheKey, dnsRecord, log); err != nil {
+			if err := r.applyDNSRecordToPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord, log); err != nil {
 				log.Error(err, "Failed to apply DNS record", "pihole", pihole.Name, "pod", i)
 				lastError = err
 			} else {
@@ -301,9 +314,8 @@ func (r *PiholeDNSRecordReconciler) buildEntry(record *cachev1alpha1.PiholeDNSRe
 }
 
 // authenticatePihole authenticates with Pi-hole and returns a session ID
-func (r *PiholeDNSRecordReconciler) authenticatePihole(ctx context.Context, baseURL, password string, log logr.Logger) (string, error) {
-	client := NewPiholeAPIClient(baseURL, password)
-	client.Client = r.httpClient
+func (r *PiholeDNSRecordReconciler) authenticatePihole(ctx context.Context, httpClient *http.Client, baseURL, password string, log logr.Logger) (string, error) {
+	client := NewPiholeAPIClient(baseURL, password, httpClient)
 	if err := client.Authenticate(ctx); err != nil {
 		return "", err
 	}
@@ -311,7 +323,7 @@ func (r *PiholeDNSRecordReconciler) authenticatePihole(ctx context.Context, base
 }
 
 // getSID gets or refreshes a session ID
-func (r *PiholeDNSRecordReconciler) getSID(ctx context.Context, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
+func (r *PiholeDNSRecordReconciler) getSID(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -321,7 +333,7 @@ func (r *PiholeDNSRecordReconciler) getSID(ctx context.Context, baseURL, passwor
 		}
 	}
 
-	sid, err := r.authenticatePihole(ctx, baseURL, password, log)
+	sid, err := r.authenticatePihole(ctx, httpClient, baseURL, password, log)
 	if err != nil {
 		return "", err
 	}
@@ -352,8 +364,8 @@ func (r *PiholeDNSRecordReconciler) getPiholePassword(ctx context.Context, pihol
 }
 
 // getPodConnection returns baseURL, SID for a given pod
-func (r *PiholeDNSRecordReconciler) getPodConnection(ctx context.Context, baseURL, password, cacheKey string, log logr.Logger) (string, string, error) {
-	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
+func (r *PiholeDNSRecordReconciler) getPodConnection(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (string, string, error) {
+	sid, err := r.getSID(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get SID: %w", err)
 	}
@@ -362,15 +374,15 @@ func (r *PiholeDNSRecordReconciler) getPodConnection(ctx context.Context, baseUR
 }
 
 // applyDNSRecordToPod applies a DNS record to a single Pi-hole pod
-func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
-	baseURL, sid, err := r.getPodConnection(ctx, baseURL, password, cacheKey, log)
+func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
+	baseURL, sid, err := r.getPodConnection(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return err
 	}
 
 	apiClient := &PiholeAPIClient{
 		BaseURL: baseURL,
-		Client:  r.httpClient,
+		Client:  httpClient,
 		SID:     sid,
 	}
 
@@ -416,21 +428,21 @@ func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, bas
 }
 
 // removeDNSRecordFromPod removes a DNS record from a single Pi-hole pod
-func (r *PiholeDNSRecordReconciler) removeDNSRecordFromPod(ctx context.Context, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
+func (r *PiholeDNSRecordReconciler) removeDNSRecordFromPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
 	entry := r.buildEntry(record)
-	return r.removeEntryFromPod(ctx, baseURL, password, cacheKey, record.Spec.RecordType, entry, log)
+	return r.removeEntryFromPod(ctx, httpClient, baseURL, password, cacheKey, record.Spec.RecordType, entry, log)
 }
 
 // removeEntryFromPod removes a specific DNS entry from a single Pi-hole pod
-func (r *PiholeDNSRecordReconciler) removeEntryFromPod(ctx context.Context, baseURL, password, cacheKey, recordType, entry string, log logr.Logger) error {
-	baseURL, sid, err := r.getPodConnection(ctx, baseURL, password, cacheKey, log)
+func (r *PiholeDNSRecordReconciler) removeEntryFromPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey, recordType, entry string, log logr.Logger) error {
+	baseURL, sid, err := r.getPodConnection(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return err
 	}
 
 	apiClient := &PiholeAPIClient{
 		BaseURL: baseURL,
-		Client:  r.httpClient,
+		Client:  httpClient,
 		SID:     sid,
 	}
 

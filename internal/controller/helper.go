@@ -3,6 +3,8 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	v1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -22,14 +26,66 @@ type PiholeAPIClient struct {
 	SID      string // Session ID after authentication
 }
 
-// NewPiholeAPIClient creates a new Pi-hole API client
-func NewPiholeAPIClient(baseURL, password string) *PiholeAPIClient {
+// buildTLSConfig constructs a *tls.Config from a PiholeAPITLSConfig and optional CA PEM bytes.
+//
+// Semantics:
+//   - cfg nil OR cfg.Enabled == false → InsecureSkipVerify: true (default, Pi-hole self-signed certs)
+//   - cfg.Enabled == true, no caData  → InsecureSkipVerify: false, system CA pool
+//   - cfg.Enabled == true, caData set → InsecureSkipVerify: false, custom CA pool
+func buildTLSConfig(cfg *v1alpha1.PiholeAPITLSConfig, caData []byte) *tls.Config {
+	// Default: skip verification (backward-compatible, Pi-hole uses self-signed certs)
+	if cfg == nil || !cfg.Enabled {
+		return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // intentional default for self-signed certs
+	}
+
+	// TLS verification enabled
+	tlsCfg := &tls.Config{InsecureSkipVerify: false}
+	if len(caData) > 0 {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(caData)
+		tlsCfg.RootCAs = pool
+	}
+	return tlsCfg
+}
+
+// buildHTTPClient builds an *http.Client with the given TLS configuration.
+func buildHTTPClient(tlsCfg *tls.Config) *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig:     tlsCfg,
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+}
+
+// getCAData reads the CA certificate bytes from the secret referenced in cfg.
+// Returns nil if cfg is nil or CASecretRef is nil (no CA configured).
+// The key field on CASecretRef is required — no default is applied.
+func getCAData(ctx context.Context, c client.Client, namespace string, cfg *v1alpha1.PiholeAPITLSConfig) ([]byte, error) {
+	if cfg == nil || cfg.CASecretRef == nil {
+		return nil, nil
+	}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Name: cfg.CASecretRef.Name, Namespace: namespace}, secret); err != nil {
+		return nil, fmt.Errorf("failed to get CA secret %q: %w", cfg.CASecretRef.Name, err)
+	}
+	data, ok := secret.Data[cfg.CASecretRef.Key]
+	if !ok {
+		return nil, fmt.Errorf("key %q not found in CA secret %q", cfg.CASecretRef.Key, cfg.CASecretRef.Name)
+	}
+	return data, nil
+}
+
+// NewPiholeAPIClient creates a new Pi-hole API client with the given HTTP client.
+// Use buildHTTPClient(buildTLSConfig(...)) to construct the client with appropriate TLS settings.
+func NewPiholeAPIClient(baseURL, password string, httpClient *http.Client) *PiholeAPIClient {
 	return &PiholeAPIClient{
 		BaseURL:  baseURL,
 		Password: password,
-		Client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		Client:   httpClient,
 	}
 }
 

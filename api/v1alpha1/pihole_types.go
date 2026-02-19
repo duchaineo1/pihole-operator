@@ -21,6 +21,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// CASecretKeyRef references a key within a Secret containing a CA certificate.
+// Unlike SecretKeyRef, the key field is required — there is no sensible default
+// for a CA certificate key name.
+type CASecretKeyRef struct {
+	// Name is the name of the Secret
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key is the key within the Secret that contains the CA certificate PEM data
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
+}
+
 // SecretKeyRef references a key within an existing Secret.
 type SecretKeyRef struct {
 	// Name is the name of the secret
@@ -30,6 +43,50 @@ type SecretKeyRef struct {
 	// +optional
 	// +kubebuilder:default="password"
 	Key string `json:"key,omitempty"`
+}
+
+// PiholeAPITLSConfig defines TLS verification settings for Pi-hole API communication
+type PiholeAPITLSConfig struct {
+	// Enabled controls whether TLS certificate verification is performed.
+	// When false (default), certificate verification is skipped — suitable for
+	// Pi-hole's default self-signed certificates.
+	// When true, the certificate is verified. For certs signed by a public CA
+	// (e.g. Let's Encrypt, GoDaddy) no further config is needed — the system
+	// CA pool is used automatically. For private or internal CAs, provide the
+	// CA certificate via CASecretRef.
+	// +optional
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+
+	// CASecretRef references a Secret containing a CA certificate used to verify
+	// Pi-hole's TLS certificate. Only needed when Enabled is true and the cert is
+	// signed by a private or internal CA (not in the system CA pool).
+	// The key field is required — specify whichever key in the Secret holds the
+	// PEM-encoded CA certificate (e.g. "ca.crt", "tls.crt").
+	// +optional
+	CASecretRef *CASecretKeyRef `json:"caSecretRef,omitempty"`
+}
+
+// PiholeServerTLSConfig defines the TLS certificate to serve on Pi-hole's HTTPS endpoint.
+// The referenced Secret must be a standard Kubernetes TLS Secret with keys tls.crt and tls.key,
+// or custom key names can be specified.
+type PiholeServerTLSConfig struct {
+	// SecretName is the name of a Secret in the same namespace containing the TLS certificate
+	// and private key. Typically created by cert-manager or kubectl create secret tls.
+	// +kubebuilder:validation:Required
+	SecretName string `json:"secretName"`
+
+	// CertKey is the key within the Secret that holds the PEM-encoded certificate (chain).
+	// Defaults to "tls.crt".
+	// +optional
+	// +kubebuilder:default="tls.crt"
+	CertKey string `json:"certKey,omitempty"`
+
+	// KeyKey is the key within the Secret that holds the PEM-encoded private key.
+	// Defaults to "tls.key".
+	// +optional
+	// +kubebuilder:default="tls.key"
+	KeyKey string `json:"keyKey,omitempty"`
 }
 
 // PiholeSpec defines the desired state of Pihole
@@ -102,6 +159,18 @@ type PiholeSpec struct {
 	// Ingress configures an Ingress resource for the Pi-hole web UI
 	// +optional
 	Ingress *PiholeIngress `json:"ingress,omitempty"`
+
+	// TLS configures TLS verification for Pi-hole API communication.
+	// Defaults to skipping certificate verification because Pi-hole uses self-signed certificates.
+	// +optional
+	TLS *PiholeAPITLSConfig `json:"tls,omitempty"`
+
+	// ServerTLS configures a TLS certificate for Pi-hole's own HTTPS endpoint.
+	// When set, the referenced Secret is mounted into the Pi-hole container and
+	// Pi-hole is configured to serve TLS using that certificate.
+	// Pairs with spec.tls for full end-to-end TLS configuration.
+	// +optional
+	ServerTLS *PiholeServerTLSConfig `json:"serverTLS,omitempty"`
 }
 
 // PiholeIngress defines Ingress configuration for the Pi-hole web UI

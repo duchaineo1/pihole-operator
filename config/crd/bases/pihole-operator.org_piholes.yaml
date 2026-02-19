@@ -196,6 +196,33 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              serverTLS:
+                description: |-
+                  ServerTLS configures a TLS certificate for Pi-hole's own HTTPS endpoint.
+                  When set, the referenced Secret is mounted into the Pi-hole container and
+                  Pi-hole is configured to serve TLS using that certificate.
+                  Pairs with spec.tls for full end-to-end TLS configuration.
+                properties:
+                  certKey:
+                    default: tls.crt
+                    description: |-
+                      CertKey is the key within the Secret that holds the PEM-encoded certificate (chain).
+                      Defaults to "tls.crt".
+                    type: string
+                  keyKey:
+                    default: tls.key
+                    description: |-
+                      KeyKey is the key within the Secret that holds the PEM-encoded private key.
+                      Defaults to "tls.key".
+                    type: string
+                  secretName:
+                    description: |-
+                      SecretName is the name of a Secret in the same namespace containing the TLS certificate
+                      and private key. Typically created by cert-manager or kubectl create secret tls.
+                    type: string
+                required:
+                - secretName
+                type: object
               size:
                 default: 1
                 description: |-
@@ -215,6 +242,42 @@ spec:
                 default: UTC
                 description: Timezone for Pi-hole (e.g., "America/New_York", "Europe/London")
                 type: string
+              tls:
+                description: |-
+                  TLS configures TLS verification for Pi-hole API communication.
+                  Defaults to skipping certificate verification because Pi-hole uses self-signed certificates.
+                properties:
+                  caSecretRef:
+                    description: |-
+                      CASecretRef references a Secret containing a CA certificate used to verify
+                      Pi-hole's TLS certificate. Only needed when Enabled is true and the cert is
+                      signed by a private or internal CA (not in the system CA pool).
+                      The key field is required — specify whichever key in the Secret holds the
+                      PEM-encoded CA certificate (e.g. "ca.crt", "tls.crt").
+                    properties:
+                      key:
+                        description: Key is the key within the Secret that contains
+                          the CA certificate PEM data
+                        type: string
+                      name:
+                        description: Name is the name of the Secret
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled controls whether TLS certificate verification is performed.
+                      When false (default), certificate verification is skipped — suitable for
+                      Pi-hole's default self-signed certificates.
+                      When true, the certificate is verified. For certs signed by a public CA
+                      (e.g. Let's Encrypt, GoDaddy) no further config is needed — the system
+                      CA pool is used automatically. For private or internal CAs, provide the
+                      CA certificate via CASecretRef.
+                    type: boolean
+                type: object
               upstreamDNS:
                 description: |-
                   UpstreamDNS is a list of upstream DNS servers for Pi-hole to forward queries to.

@@ -232,6 +232,118 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Reconcile server TLS volume, volumeMount, and env vars
+	if len(found.Spec.Template.Spec.Containers) > 0 {
+		desiredCertKey := ""
+		desiredKeyKey := ""
+		desiredSecretName := ""
+		if pihole.Spec.ServerTLS != nil {
+			desiredCertKey = pihole.Spec.ServerTLS.CertKey
+			if desiredCertKey == "" {
+				desiredCertKey = "tls.crt"
+			}
+			desiredKeyKey = pihole.Spec.ServerTLS.KeyKey
+			if desiredKeyKey == "" {
+				desiredKeyKey = "tls.key"
+			}
+			desiredSecretName = pihole.Spec.ServerTLS.SecretName
+		}
+
+		// Reconcile the server-tls volume
+		volIdx := -1
+		for i, v := range found.Spec.Template.Spec.Volumes {
+			if v.Name == "server-tls" {
+				volIdx = i
+				break
+			}
+		}
+		if desiredSecretName != "" {
+			desiredVol := corev1.Volume{
+				Name: "server-tls",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: desiredSecretName,
+					},
+				},
+			}
+			if volIdx < 0 {
+				found.Spec.Template.Spec.Volumes = append(found.Spec.Template.Spec.Volumes, desiredVol)
+				needsUpdate = true
+			} else if found.Spec.Template.Spec.Volumes[volIdx].VolumeSource.Secret == nil ||
+				found.Spec.Template.Spec.Volumes[volIdx].VolumeSource.Secret.SecretName != desiredSecretName {
+				found.Spec.Template.Spec.Volumes[volIdx] = desiredVol
+				needsUpdate = true
+			}
+		} else if volIdx >= 0 {
+			// serverTLS removed — drop the volume
+			found.Spec.Template.Spec.Volumes = append(
+				found.Spec.Template.Spec.Volumes[:volIdx],
+				found.Spec.Template.Spec.Volumes[volIdx+1:]...)
+			needsUpdate = true
+		}
+
+		// Reconcile the server-tls volumeMount
+		vmIdx := -1
+		for i, vm := range found.Spec.Template.Spec.Containers[0].VolumeMounts {
+			if vm.Name == "server-tls" {
+				vmIdx = i
+				break
+			}
+		}
+		if desiredSecretName != "" {
+			if vmIdx < 0 {
+				found.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+					found.Spec.Template.Spec.Containers[0].VolumeMounts,
+					corev1.VolumeMount{
+						Name:      "server-tls",
+						MountPath: "/etc/pihole/tls",
+						ReadOnly:  true,
+					},
+				)
+				needsUpdate = true
+			}
+		} else if vmIdx >= 0 {
+			found.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+				found.Spec.Template.Spec.Containers[0].VolumeMounts[:vmIdx],
+				found.Spec.Template.Spec.Containers[0].VolumeMounts[vmIdx+1:]...)
+			needsUpdate = true
+		}
+
+		// Reconcile FTLCONF_webserver_tls_cert and FTLCONF_webserver_tls_key env vars
+		desiredCertPath := ""
+		desiredKeyPath := ""
+		if desiredSecretName != "" {
+			desiredCertPath = fmt.Sprintf("/etc/pihole/tls/%s", desiredCertKey)
+			desiredKeyPath = fmt.Sprintf("/etc/pihole/tls/%s", desiredKeyKey)
+		}
+		currentCertPath := ""
+		currentKeyPath := ""
+		for _, e := range found.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "FTLCONF_webserver_tls_cert" {
+				currentCertPath = e.Value
+			}
+			if e.Name == "FTLCONF_webserver_tls_key" {
+				currentKeyPath = e.Value
+			}
+		}
+		if currentCertPath != desiredCertPath || currentKeyPath != desiredKeyPath {
+			newEnv := make([]corev1.EnvVar, 0, len(found.Spec.Template.Spec.Containers[0].Env))
+			for _, e := range found.Spec.Template.Spec.Containers[0].Env {
+				if e.Name != "FTLCONF_webserver_tls_cert" && e.Name != "FTLCONF_webserver_tls_key" {
+					newEnv = append(newEnv, e)
+				}
+			}
+			if desiredSecretName != "" {
+				newEnv = append(newEnv,
+					corev1.EnvVar{Name: "FTLCONF_webserver_tls_cert", Value: desiredCertPath},
+					corev1.EnvVar{Name: "FTLCONF_webserver_tls_key", Value: desiredKeyPath},
+				)
+			}
+			found.Spec.Template.Spec.Containers[0].Env = newEnv
+			needsUpdate = true
+		}
+	}
+
 	// Reconcile readiness probe
 	if len(found.Spec.Template.Spec.Containers) > 0 {
 		if !reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].ReadinessProbe, piholeReadinessProbe()) {
@@ -306,7 +418,9 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				baseURL = override
 			}
 		}
-		apiClient := NewPiholeAPIClient(baseURL, password)
+		caData, _ := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
+		tlsCfg := buildTLSConfig(pihole.Spec.TLS, caData)
+		apiClient := NewPiholeAPIClient(baseURL, password, buildHTTPClient(tlsCfg))
 		if stats, statsErr := apiClient.GetStats(ctx); statsErr == nil {
 			pihole.Status.QueriesTotal = stats.Queries.Total
 			pihole.Status.QueriesBlocked = stats.Queries.Blocked
@@ -709,6 +823,51 @@ func (r *PiholeReconciler) statefulSetForPihole(
 			corev1.EnvVar{
 				Name:  "FTLCONF_dns_upstreams",
 				Value: upstreamValue,
+			},
+		)
+	}
+
+	// Mount server TLS certificate when configured
+	if pihole.Spec.ServerTLS != nil {
+		certKey := pihole.Spec.ServerTLS.CertKey
+		if certKey == "" {
+			certKey = "tls.crt"
+		}
+		keyKey := pihole.Spec.ServerTLS.KeyKey
+		if keyKey == "" {
+			keyKey = "tls.key"
+		}
+
+		// Mount the TLS secret as a volume
+		sts.Spec.Template.Spec.Volumes = append(sts.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: "server-tls",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: pihole.Spec.ServerTLS.SecretName,
+				},
+			},
+		})
+
+		// Mount the volume into the pihole container
+		sts.Spec.Template.Spec.Containers[0].VolumeMounts = append(
+			sts.Spec.Template.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "server-tls",
+				MountPath: "/etc/pihole/tls",
+				ReadOnly:  true,
+			},
+		)
+
+		// Set FTLCONF env vars to point Pi-hole at the mounted cert and key
+		sts.Spec.Template.Spec.Containers[0].Env = append(
+			sts.Spec.Template.Spec.Containers[0].Env,
+			corev1.EnvVar{
+				Name:  "FTLCONF_webserver_tls_cert",
+				Value: fmt.Sprintf("/etc/pihole/tls/%s", certKey),
+			},
+			corev1.EnvVar{
+				Name:  "FTLCONF_webserver_tls_key",
+				Value: fmt.Sprintf("/etc/pihole/tls/%s", keyKey),
 			},
 		)
 	}

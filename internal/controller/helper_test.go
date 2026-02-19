@@ -81,7 +81,7 @@ func TestAuthenticate_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewPiholeAPIClient(srv.URL, "test-password")
+	client := NewPiholeAPIClient(srv.URL, "test-password", buildHTTPClient(buildTLSConfig(nil, nil)))
 	err := client.Authenticate(context.Background())
 	if err != nil {
 		t.Fatalf("Authenticate() error: %v", err)
@@ -101,7 +101,7 @@ func TestAuthenticate_InvalidSession(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewPiholeAPIClient(srv.URL, "wrong")
+	client := NewPiholeAPIClient(srv.URL, "wrong", buildHTTPClient(buildTLSConfig(nil, nil)))
 	err := client.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error for invalid session")
@@ -118,7 +118,7 @@ func TestAuthenticate_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewPiholeAPIClient(srv.URL, "bad")
+	client := NewPiholeAPIClient(srv.URL, "bad", buildHTTPClient(buildTLSConfig(nil, nil)))
 	err := client.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error for HTTP 401")
@@ -135,7 +135,7 @@ func TestAuthenticate_BadJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewPiholeAPIClient(srv.URL, "test")
+	client := NewPiholeAPIClient(srv.URL, "test", buildHTTPClient(buildTLSConfig(nil, nil)))
 	err := client.Authenticate(context.Background())
 	if err == nil {
 		t.Fatal("expected error for bad JSON")
@@ -144,9 +144,8 @@ func TestAuthenticate_BadJSON(t *testing.T) {
 
 // helper: create a pre-authenticated client against a test server
 func newAuthenticatedClient(srv *httptest.Server) *PiholeAPIClient {
-	c := NewPiholeAPIClient(srv.URL, "test")
+	c := NewPiholeAPIClient(srv.URL, "test", srv.Client())
 	c.SID = "pre-auth-sid"
-	c.Client = srv.Client()
 	return c
 }
 
@@ -209,7 +208,7 @@ func TestAddBlocklist_AutoAuthenticates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewPiholeAPIClient(srv.URL, "test")
+	client := NewPiholeAPIClient(srv.URL, "test", buildHTTPClient(buildTLSConfig(nil, nil)))
 	_, err := client.AddBlocklist(context.Background(), BlocklistCreateRequest{
 		Address: "https://example.com/list.txt",
 		Enabled: true,

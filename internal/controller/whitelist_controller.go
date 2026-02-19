@@ -3,7 +3,6 @@ package controller
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,10 +33,9 @@ const (
 // WhitelistReconciler reconciles a Whitelist object
 type WhitelistReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	httpClient *http.Client
-	sidCache   map[string]*cachedSID
-	mu         sync.Mutex
+	Scheme   *runtime.Scheme
+	sidCache map[string]*cachedSID
+	mu       sync.Mutex
 
 	// BaseURLOverride maps "namespace/name" to a base URL. Used in tests.
 	BaseURLOverride map[string]string
@@ -91,22 +89,18 @@ type WhitelistProcessedError struct {
 
 // Init initializes the reconciler
 func (r *WhitelistReconciler) Init() {
-	if r.httpClient == nil {
-		r.httpClient = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, // Pi-hole uses self-signed certs
-				},
-				MaxIdleConns:        10,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-			},
-		}
-	}
 	if r.sidCache == nil {
 		r.sidCache = make(map[string]*cachedSID)
 	}
+}
+
+// httpClientForPihole builds a per-Pihole HTTP client using TLS config from the spec.
+func (r *WhitelistReconciler) httpClientForPihole(ctx context.Context, pihole *cachev1alpha1.Pihole) (*http.Client, error) {
+	caData, err := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
+	if err != nil {
+		return nil, err
+	}
+	return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData)), nil
 }
 
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=whitelists,verbs=get;list;watch;create;update;patch;delete
@@ -158,6 +152,12 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 					continue
 				}
 
+				httpClient, err := r.httpClientForPihole(ctx, &pihole)
+				if err != nil {
+					log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+					continue
+				}
+
 				replicas := int32(1)
 				if pihole.Spec.Size != nil {
 					replicas = *pihole.Spec.Size
@@ -172,7 +172,7 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 						baseURL = override
 					}
 
-					if err := r.removeWhitelistFromPod(ctx, baseURL, password, cacheKey, whitelist, log); err != nil {
+					if err := r.removeWhitelistFromPod(ctx, httpClient, baseURL, password, cacheKey, whitelist, log); err != nil {
 						log.Error(err, "Failed to remove whitelist", "pihole", pihole.Name, "pod", i)
 					}
 				}
@@ -215,6 +215,13 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			continue
 		}
 
+		httpClient, err := r.httpClientForPihole(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+			lastError = err
+			continue
+		}
+
 		replicas := int32(1)
 		if pihole.Spec.Size != nil {
 			replicas = *pihole.Spec.Size
@@ -229,7 +236,7 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				baseURL = override
 			}
 
-			if err := r.applyWhitelistToPod(ctx, baseURL, password, cacheKey, whitelist, log); err != nil {
+			if err := r.applyWhitelistToPod(ctx, httpClient, baseURL, password, cacheKey, whitelist, log); err != nil {
 				log.Error(err, "Failed to apply whitelist", "pihole", pihole.Name, "pod", i)
 				lastError = err
 			} else {
@@ -264,7 +271,7 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // authenticatePihole authenticates with Pi-hole and returns a session ID
-func (r *WhitelistReconciler) authenticatePihole(ctx context.Context, baseURL, password string, log logr.Logger) (string, error) {
+func (r *WhitelistReconciler) authenticatePihole(ctx context.Context, httpClient *http.Client, baseURL, password string, log logr.Logger) (string, error) {
 	authURL := fmt.Sprintf("%s/api/auth", baseURL)
 
 	authReq := map[string]string{"password": password}
@@ -283,7 +290,7 @@ func (r *WhitelistReconciler) authenticatePihole(ctx context.Context, baseURL, p
 
 	log.Info("Authenticating with Pi-hole", "url", authURL)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("auth request failed: %w", err)
 	}
@@ -312,7 +319,7 @@ func (r *WhitelistReconciler) authenticatePihole(ctx context.Context, baseURL, p
 }
 
 // getSID gets or refreshes a session ID
-func (r *WhitelistReconciler) getSID(ctx context.Context, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
+func (r *WhitelistReconciler) getSID(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -324,7 +331,7 @@ func (r *WhitelistReconciler) getSID(ctx context.Context, baseURL, password, cac
 	}
 
 	// Authenticate
-	sid, err := r.authenticatePihole(ctx, baseURL, password, log)
+	sid, err := r.authenticatePihole(ctx, httpClient, baseURL, password, log)
 	if err != nil {
 		return "", err
 	}
@@ -356,14 +363,14 @@ func (r *WhitelistReconciler) getPiholePassword(ctx context.Context, pihole *cac
 	return password, nil
 }
 
-func (r *WhitelistReconciler) applyWhitelistToPod(ctx context.Context, baseURL, password, cacheKey string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
-	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
+func (r *WhitelistReconciler) applyWhitelistToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
+	sid, err := r.getSID(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return fmt.Errorf("failed to get SID: %w", err)
 	}
 
 	// Get existing allow-list domains
-	existingDomains, err := r.getWhitelistDomains(ctx, baseURL, sid, log)
+	existingDomains, err := r.getWhitelistDomains(ctx, httpClient, baseURL, sid, log)
 	if err != nil {
 		log.Error(err, "Failed to get existing whitelist domains, will try to add anyway")
 		existingDomains = []WhitelistDomainResponse{}
@@ -381,7 +388,7 @@ func (r *WhitelistReconciler) applyWhitelistToPod(ctx context.Context, baseURL, 
 		}
 
 		if !found {
-			if err := r.addWhitelistDomain(ctx, baseURL, sid, domain, whitelist, log); err != nil {
+			if err := r.addWhitelistDomain(ctx, httpClient, baseURL, sid, domain, whitelist, log); err != nil {
 				return fmt.Errorf("failed to add domain %s: %w", domain, err)
 			}
 		}
@@ -391,7 +398,7 @@ func (r *WhitelistReconciler) applyWhitelistToPod(ctx context.Context, baseURL, 
 }
 
 // getWhitelistDomains retrieves current allow-list domains from Pi-hole
-func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, baseURL, sid string, log logr.Logger) ([]WhitelistDomainResponse, error) {
+func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, httpClient *http.Client, baseURL, sid string, log logr.Logger) ([]WhitelistDomainResponse, error) {
 	url := fmt.Sprintf("%s/api/domains/allow/exact", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -402,7 +409,7 @@ func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, baseURL, 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", sid)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +438,7 @@ func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, baseURL, 
 }
 
 // addWhitelistDomain adds a single domain to the allow list
-func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, baseURL, sid, domain string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
+func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, httpClient *http.Client, baseURL, sid, domain string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
 	url := fmt.Sprintf("%s/api/domains/allow/exact", baseURL)
 
 	domainReq := WhitelistDomainRequest{
@@ -457,7 +464,7 @@ func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, baseURL, s
 
 	log.Info("Adding whitelist domain", "domain", domain)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -497,8 +504,8 @@ func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, baseURL, s
 }
 
 // removeWhitelistFromPod removes whitelist domains from a single Pi-hole pod
-func (r *WhitelistReconciler) removeWhitelistFromPod(ctx context.Context, baseURL, password, cacheKey string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
-	sid, err := r.getSID(ctx, baseURL, password, cacheKey, log)
+func (r *WhitelistReconciler) removeWhitelistFromPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, whitelist *cachev1alpha1.Whitelist, log logr.Logger) error {
+	sid, err := r.getSID(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return fmt.Errorf("failed to get SID: %w", err)
 	}
@@ -510,7 +517,7 @@ func (r *WhitelistReconciler) removeWhitelistFromPod(ctx context.Context, baseUR
 		req.Header.Set("X-FTL-SID", sid)
 		req.Header.Set("Accept", "application/json")
 
-		resp, err := r.httpClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			log.Error(err, "Failed to delete whitelist domain", "domain", domain)
 			continue

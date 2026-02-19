@@ -8,6 +8,18 @@ spec:
   timezone: "America/New_York"
   dnsServiceType: NodePort
   webServiceType: ClusterIP
+  # TLS configuration for Pi-hole API communication (all three controllers use this)
+  # Omit entirely for the default behavior: InsecureSkipVerify=true (Pi-hole self-signed certs)
+  # tls:
+  #   insecureSkipVerify: false    # Set to false when using a trusted CA
+  #   caSecretRef:
+  #     name: pihole-ca-cert       # Secret containing key "ca.crt" with the CA PEM
+  #     key: ca.crt                # Optional — defaults to "ca.crt"
+
+  # serverTLS:
+  #   secretName: pihole-tls        # TLS Secret (tls.crt + tls.key)
+  #   certKey: tls.crt              # optional, defaults to tls.crt
+  #   keyKey: tls.key               # optional, defaults to tls.key
 
 # After the operator reconciles, status will be enriched with live stats
 # fetched from pod 0 via the Pi-hole API (/api/stats/summary).
