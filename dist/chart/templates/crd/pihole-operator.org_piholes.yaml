@@ -15,6 +15,23 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - description: Number of ready replicas
+      jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: DNS service IP
+      jsonPath: .status.dnsIP
+      name: DNS IP
+      priority: 1
+      type: string
+    - description: Web UI URL
+      jsonPath: .status.webURL
+      name: Web URL
+      priority: 1
+      type: string
     - description: Total DNS queries
       jsonPath: .status.queriesTotal
       name: Queries
@@ -25,20 +42,11 @@ spec:
       name: Blocked
       priority: 1
       type: string
-    - description: Gravity domains
+    - description: Total domains in blocklists
       jsonPath: .status.gravityDomains
-      name: Gravity
+      name: Blocked Domains
       priority: 1
       type: integer
-    - description: DNS service IP
-      jsonPath: .status.dnsIP
-      name: DNS IP
-      type: string
-    - description: Web UI URL
-      jsonPath: .status.webURL
-      name: Web URL
-      priority: 1
-      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
