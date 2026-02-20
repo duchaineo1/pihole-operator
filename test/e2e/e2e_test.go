@@ -1231,75 +1231,6 @@ spec:
 			Eventually(verifyGone, 2*time.Minute).Should(Succeed())
 		})
 	})
-})
-
-// serviceAccountToken returns a token for the specified service account in the given namespace.
-func serviceAccountToken() (string, error) {
-	const tokenRequestRawString = `{
-		"apiVersion": "authentication.k8s.io/v1",
-		"kind": "TokenRequest"
-	}`
-
-	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
-	tokenRequestFile := filepath.Join("/tmp", secretName)
-	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
-	if err != nil {
-		return "", err
-	}
-
-	var out string
-	verifyTokenCreation := func(g Gomega) {
-		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
-			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
-			namespace,
-			serviceAccountName,
-		), "-f", tokenRequestFile)
-
-		output, err := cmd.CombinedOutput()
-		g.Expect(err).NotTo(HaveOccurred())
-
-		var token tokenRequest
-		err = json.Unmarshal(output, &token)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		out = token.Status.Token
-	}
-	Eventually(verifyTokenCreation).Should(Succeed())
-
-	return out, err
-}
-
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
-func getMetricsOutput() (string, error) {
-	By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-	return utils.Run(cmd)
-}
-
-// applyManifest writes a YAML string to a temp file and runs kubectl apply.
-func applyManifest(yaml string) error {
-	tmpFile, err := os.CreateTemp("", "e2e-manifest-*.yaml")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.WriteString(yaml); err != nil {
-		return err
-	}
-	tmpFile.Close()
-
-	cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
-	_, err = utils.Run(cmd)
-	return err
-}
-
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response.
-type tokenRequest struct {
-	Status struct {
-		Token string `json:"token"`
-	} `json:"status"`
-}
 
 	// ---------------------------------------------------------------
 	// Config passthrough e2e tests
@@ -1425,3 +1356,73 @@ spec:
 			}
 		})
 	})
+})
+
+// serviceAccountToken returns a token for the specified service account in the given namespace.
+func serviceAccountToken() (string, error) {
+	const tokenRequestRawString = `{
+		"apiVersion": "authentication.k8s.io/v1",
+		"kind": "TokenRequest"
+	}`
+
+	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
+	tokenRequestFile := filepath.Join("/tmp", secretName)
+	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
+	if err != nil {
+		return "", err
+	}
+
+	var out string
+	verifyTokenCreation := func(g Gomega) {
+		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
+			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
+			namespace,
+			serviceAccountName,
+		), "-f", tokenRequestFile)
+
+		output, err := cmd.CombinedOutput()
+		g.Expect(err).NotTo(HaveOccurred())
+
+		var token tokenRequest
+		err = json.Unmarshal(output, &token)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		out = token.Status.Token
+	}
+	Eventually(verifyTokenCreation).Should(Succeed())
+
+	return out, err
+}
+
+// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
+func getMetricsOutput() (string, error) {
+	By("getting the curl-metrics logs")
+	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
+	return utils.Run(cmd)
+}
+
+// applyManifest writes a YAML string to a temp file and runs kubectl apply.
+func applyManifest(yaml string) error {
+	tmpFile, err := os.CreateTemp("", "e2e-manifest-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(yaml); err != nil {
+		return err
+	}
+	tmpFile.Close()
+
+	cmd := exec.Command("kubectl", "apply", "-f", tmpFile.Name())
+	_, err = utils.Run(cmd)
+	return err
+}
+
+// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response.
+type tokenRequest struct {
+	Status struct {
+		Token string `json:"token"`
+	} `json:"status"`
+}
+
