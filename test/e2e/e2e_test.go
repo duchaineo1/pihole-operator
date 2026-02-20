@@ -79,7 +79,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
-		By("creating a shared Pihole CR for Whitelist/Blocklist/DNSRecord tests")
+		By("creating a shared Pihole CR for Whitelist/Blocklist/DNSRecord/Config tests")
 		sharedPiholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
 kind: Pihole
 metadata:
@@ -90,6 +90,9 @@ spec:
   adminPassword: "shared-test-pw"
   dnsServiceType: "ClusterIP"
   webServiceType: "ClusterIP"
+  config:
+    dns.queryLogging: "true"
+    dns.privacyLevel: "0"
 `, testNamespace)
 		Expect(applyManifest(sharedPiholeYAML)).To(Succeed(), "Failed to create shared Pihole")
 	})
@@ -1233,38 +1236,15 @@ spec:
 	})
 
 	// ---------------------------------------------------------------
-	// Config passthrough e2e tests
+	// Config passthrough e2e tests (reuses shared-pihole)
 	// ---------------------------------------------------------------
 	Context("Pihole CR with config passthrough", func() {
-		const piholeName = "test-pihole-config"
-		const password = "config-test-pw-12345"
+		const piholeName = "shared-pihole"
+		const password = "shared-test-pw"
 		var helper *configAPITestHelper
 
-		AfterAll(func() {
-			cmd := exec.Command("kubectl", "delete", "pihole", piholeName, "-n", testNamespace, "--ignore-not-found")
-			_, _ = utils.Run(cmd)
-		})
-
 		It("should apply config keys via the Pi-hole API", func() {
-			By("creating a Pihole with config")
-			piholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
-kind: Pihole
-metadata:
-  name: %s
-  namespace: %s
-spec:
-  size: 1
-  adminPassword: "%s"
-  dnsServiceType: "ClusterIP"
-  webServiceType: "ClusterIP"
-  config:
-    dns.queryLogging: "true"
-    dns.privacyLevel: "0"
-`, piholeName, testNamespace, password)
-			err := applyManifest(piholeYAML)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create Pihole with config")
-
-			By("waiting for the StatefulSet pod to be Running")
+			By("waiting for the shared-pihole StatefulSet pod to be Running")
 			waitForPod := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "pod", piholeName+"-0",
 					"-n", testNamespace, "-o", "jsonpath={.status.phase}")
