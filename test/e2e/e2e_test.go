@@ -1288,6 +1288,16 @@ spec:
 
 			helper = newConfigAPITestHelper(piholeName, testNamespace, podIP, password)
 
+			By("waiting for Pi-hole API to be responsive")
+			waitForAPI := func(g Gomega) {
+				baseURL := fmt.Sprintf("https://%s", podIP)
+				resp, err := helper.client.Get(baseURL + "/admin/")
+				g.Expect(err).NotTo(HaveOccurred())
+				defer resp.Body.Close()
+				g.Expect(resp.StatusCode).To(BeNumerically("<", 500))
+			}
+			Eventually(waitForAPI, 3*time.Minute, 5*time.Second).Should(Succeed())
+
 			By("authenticating to the Pi-hole API")
 			authSuccess := func(g Gomega) {
 				err := helper.authenticate()
