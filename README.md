@@ -246,6 +246,26 @@ spec:
 | `serverTLS.certKey` | `tls.crt` | Key within the Secret holding the PEM certificate chain |
 | `serverTLS.keyKey` | `tls.key` | Key within the Secret holding the PEM private key |
 
+#### Arbitrary Config Passthrough
+
+Set any Pi-hole FTL configuration key declaratively:
+
+```yaml
+spec:
+  config:
+    dns.queryLogging: "true"
+    dns.rateLimit.count: "1000"
+    dns.privacyLevel: "0"
+```
+
+The operator applies these via the Pi-hole API on every reconcile. Manual changes
+via the web UI are reverted — the CRD is the source of truth (GitOps-friendly).
+
+**Security:** Config keys are validated (alphanumeric, dots, underscores, hyphens only)
+and URL-encoded to prevent path traversal attacks.
+
+See the [Pi-hole FTL documentation](https://docs.pi-hole.net/ftldns/configfile/) for available keys.
+
 ### Blocklist
 
 Create a `Blocklist` resource to manage blocklists. It is automatically applied to all `Pihole` instances in the same namespace.

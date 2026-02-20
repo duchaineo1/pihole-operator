@@ -19,8 +19,10 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -1507,6 +1509,172 @@ var _ = Describe("Pihole Controller", func() {
 				Expect(e.Name).NotTo(Equal("FTLCONF_webserver_tls_cert"), "FTLCONF_webserver_tls_cert should be removed")
 				Expect(e.Name).NotTo(Equal("FTLCONF_webserver_tls_key"), "FTLCONF_webserver_tls_key should be removed")
 			}
+		})
+	})
+
+	// ---------------------------------------------------------------
+	// Config passthrough tests
+	// ---------------------------------------------------------------
+	Context("Config passthrough", func() {
+		var (
+			nn                types.NamespacedName
+			mockServer        *httptest.Server
+			receivedRequests  []string
+			receivedPayloads  map[string]string
+		)
+
+		BeforeEach(func() {
+			receivedRequests = []string{}
+			receivedPayloads = make(map[string]string)
+
+			// Set up a mock Pi-hole API server that handles auth and config PATCH.
+			mockServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/api/auth":
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"session": map[string]interface{}{
+							"valid": true,
+							"sid":   "test-sid-config",
+						},
+					})
+
+				case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/config/"):
+					// Log the request
+					receivedRequests = append(receivedRequests, r.URL.Path)
+
+					// Parse the key from the path
+					key := strings.TrimPrefix(r.URL.Path, "/api/config/")
+
+					// Read and parse the payload
+					body, _ := io.ReadAll(r.Body)
+					var payload map[string]interface{}
+					_ = json.Unmarshal(body, &payload)
+					if val, ok := payload["value"].(string); ok {
+						receivedPayloads[key] = val
+					}
+
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+
+				case r.Method == http.MethodGet && r.URL.Path == "/api/stats/summary":
+					// Minimal stats response to keep reconciler happy
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(StatsSummaryResponse{})
+
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+		})
+
+		AfterEach(func() {
+			mockServer.Close()
+			if nn.Name != "" {
+				deletePihole(nn)
+			}
+		})
+
+		It("should apply valid config keys via PATCH /api/config/{key}", func() {
+			nn = createPihole("test-config-valid", cachev1alpha1.PiholeSpec{
+				AdminPassword: "test-password",
+				Config: map[string]string{
+					"dns.queryLogging":    "true",
+					"dns.rateLimit.count": "500",
+				},
+			})
+
+			configReconciler := &PiholeReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				BaseURLOverride: map[string]string{
+					PodCacheKey("default", "test-config-valid", 0): mockServer.URL,
+				},
+			}
+
+			// First reconcile creates all child resources
+			_, err := configReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile applies config
+			_, err = configReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify PATCH requests were made to correct endpoints
+			Expect(receivedRequests).To(ContainElement("/api/config/dns.queryLogging"))
+			Expect(receivedRequests).To(ContainElement("/api/config/dns.rateLimit.count"))
+
+			// Verify payloads
+			Expect(receivedPayloads["dns.queryLogging"]).To(Equal("true"))
+			Expect(receivedPayloads["dns.rateLimit.count"]).To(Equal("500"))
+		})
+
+		It("should reject invalid config keys without making API calls", func() {
+			// These keys should be rejected by validation
+			nn = createPihole("test-config-invalid", cachev1alpha1.PiholeSpec{
+				AdminPassword: "test-password",
+				Config: map[string]string{
+					"../../etc/passwd": "bad",
+					"":                 "empty",
+					"a/b":              "slash",
+				},
+			})
+
+			configReconciler := &PiholeReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				BaseURLOverride: map[string]string{
+					PodCacheKey("default", "test-config-invalid", 0): mockServer.URL,
+				},
+			}
+
+			// First reconcile creates all child resources
+			_, err := configReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile attempts to apply config (but validation should reject)
+			receivedRequests = []string{} // Reset to check if any invalid requests were made
+			_, err = configReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred()) // Reconcile should succeed (errors are logged, not returned)
+
+			// Verify NO PATCH requests were made for invalid keys
+			for _, path := range receivedRequests {
+				Expect(path).NotTo(ContainSubstring("etc/passwd"))
+				Expect(path).NotTo(Equal("/api/config/"))
+				Expect(path).NotTo(ContainSubstring("a/b"))
+			}
+		})
+
+		It("should URL-encode config keys properly", func() {
+			nn = createPihole("test-config-encoding", cachev1alpha1.PiholeSpec{
+				AdminPassword: "test-password",
+				Config: map[string]string{
+					"dns.key-name": "value",
+				},
+			})
+
+			configReconciler := &PiholeReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				BaseURLOverride: map[string]string{
+					PodCacheKey("default", "test-config-encoding", 0): mockServer.URL,
+				},
+			}
+
+			// First reconcile creates all child resources
+			_, err := configReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile applies config
+			_, err = configReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify the key was properly encoded in the URL path
+			Expect(receivedRequests).To(ContainElement("/api/config/dns.key-name"))
+			Expect(receivedPayloads["dns.key-name"]).To(Equal("value"))
 		})
 	})
 })

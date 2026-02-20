@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	v1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
@@ -17,6 +19,29 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// validConfigKeyPattern ensures config keys are safe FTL identifiers.
+// Allowed: letters, digits, dots, underscores, hyphens. Must start with a letter.
+var validConfigKeyPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._-]*$`)
+
+// validateConfigKey checks if a config key is safe to send to the Pi-hole API.
+// Prevents path traversal and enforces FTL config key naming conventions.
+func validateConfigKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("config key cannot be empty")
+	}
+	if len(key) > 100 {
+		return fmt.Errorf("config key %q exceeds maximum length of 100 characters", key)
+	}
+	if !validConfigKeyPattern.MatchString(key) {
+		return fmt.Errorf("config key %q must match pattern ^[a-zA-Z][a-zA-Z0-9._-]*$", key)
+	}
+	// Extra paranoia: block path traversal even if regex passed
+	if strings.Contains(key, "..") || strings.Contains(key, "/") || strings.Contains(key, "\\") {
+		return fmt.Errorf("config key %q contains path traversal characters", key)
+	}
+	return nil
+}
 
 // PiholeAPIClient handles communication with Pi-hole API
 type PiholeAPIClient struct {
@@ -561,6 +586,48 @@ func (c *PiholeAPIClient) GetStats(ctx context.Context) (*StatsSummaryResponse, 
 	}
 
 	return &stats, nil
+}
+
+// SetConfig sets a single Pi-hole FTL configuration key via PATCH /api/config/{key}.
+// The key is validated and URL-encoded before sending.
+func (c *PiholeAPIClient) SetConfig(ctx context.Context, key, value string) error {
+	if err := validateConfigKey(key); err != nil {
+		return err
+	}
+
+	escapedKey := neturl.PathEscape(key)
+	endpoint := fmt.Sprintf("%s/api/config/%s", c.BaseURL, escapedKey)
+
+	payload := map[string]interface{}{
+		"value": value,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create PATCH request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.SID != "" {
+		req.Header.Set("X-FTL-SID", c.SID)
+	}
+
+	resp, err := c.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("PATCH request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PATCH /api/config/%s returned %d: %s", key, resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
 
 // PodBaseURL returns the HTTPS base URL for an individual StatefulSet pod.

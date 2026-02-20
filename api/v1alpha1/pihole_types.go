@@ -171,6 +171,15 @@ type PiholeSpec struct {
 	// Pairs with spec.tls for full end-to-end TLS configuration.
 	// +optional
 	ServerTLS *PiholeServerTLSConfig `json:"serverTLS,omitempty"`
+
+	// Config is a map of arbitrary Pi-hole FTL configuration key-value pairs.
+	// Keys must be valid FTL config identifiers (alphanumeric, dots, underscores, hyphens only).
+	// The operator applies these via the Pi-hole API and enforces them on every reconcile.
+	// Example: {"dns.queryLogging": "true", "dns.rateLimit.count": "1000"}
+	// See Pi-hole FTL documentation for available configuration keys.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=100
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // PiholeIngress defines Ingress configuration for the Pi-hole web UI

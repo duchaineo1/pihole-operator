@@ -92,6 +92,17 @@ spec:
                 required:
                 - name
                 type: object
+              config:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Config is a map of arbitrary Pi-hole FTL configuration key-value pairs.
+                  Keys must be valid FTL config identifiers (alphanumeric, dots, underscores, hyphens only).
+                  The operator applies these via the Pi-hole API and enforces them on every reconcile.
+                  Example: {"dns.queryLogging": "true", "dns.rateLimit.count": "1000"}
+                  See Pi-hole FTL documentation for available configuration keys.
+                maxProperties: 100
+                type: object
               dnsLoadBalancerIP:
                 description: DnsLoadBalancerIP is the IP to use for DNS LoadBalancer
                   service type

@@ -21,6 +21,16 @@ spec:
   #   certKey: tls.crt              # optional, defaults to tls.crt
   #   keyKey: tls.key               # optional, defaults to tls.key
 
+  # config:
+  #   # Query logging
+  #   dns.queryLogging: "true"
+  #   # Rate limiting
+  #   dns.rateLimit.count: "1000"
+  #   dns.rateLimit.interval: "60"
+  #   # Privacy level (0=show all, 3=anonymous)
+  #   dns.privacyLevel: "0"
+  #   # Any valid Pi-hole FTL config key
+
 # After the operator reconciles, status will be enriched with live stats
 # fetched from pod 0 via the Pi-hole API (/api/stats/summary).
 # Example status:

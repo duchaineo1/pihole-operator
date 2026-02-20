@@ -436,6 +436,38 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		log.Info("Could not read admin password for stats fetch (non-fatal)", "error", pwErr)
 	}
 
+	// Apply arbitrary config keys when specified
+	if len(pihole.Spec.Config) > 0 {
+		if password, pwErr := r.getAdminPassword(ctx, pihole); pwErr == nil {
+			caData, _ := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
+			tlsCfg := buildTLSConfig(pihole.Spec.TLS, caData)
+			httpClient := buildHTTPClient(tlsCfg)
+
+			// Apply config to pod 0 (canonical source)
+			baseURL := PodBaseURL(pihole.Name, pihole.Namespace, 0)
+			if r.BaseURLOverride != nil {
+				if override, ok := r.BaseURLOverride[PodCacheKey(pihole.Namespace, pihole.Name, 0)]; ok {
+					baseURL = override
+				}
+			}
+			apiClient := NewPiholeAPIClient(baseURL, password, httpClient)
+			if err := apiClient.Authenticate(ctx); err != nil {
+				log.Info("Skipping config application: authentication failed", "error", err)
+			} else {
+				for key, value := range pihole.Spec.Config {
+					if err := apiClient.SetConfig(ctx, key, value); err != nil {
+						log.Error(err, "Failed to apply config key", "key", key, "value", value)
+						// Continue applying other keys even if one fails
+					} else {
+						log.V(1).Info("Applied config key", "key", key, "value", value)
+					}
+				}
+			}
+		} else {
+			log.Info("Could not read admin password for config application (non-fatal)", "error", pwErr)
+		}
+	}
+
 	meta.SetStatusCondition(&pihole.Status.Conditions, metav1.Condition{
 		Type:    typeAvailablePihole,
 		Status:  metav1.ConditionTrue,
