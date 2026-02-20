@@ -599,7 +599,9 @@ func (c *PiholeAPIClient) SetConfig(ctx context.Context, key, value string) erro
 	endpoint := fmt.Sprintf("%s/api/config/%s", c.BaseURL, escapedKey)
 
 	payload := map[string]interface{}{
-		"value": value,
+		"config": map[string]interface{}{
+			"value": value,
+		},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
