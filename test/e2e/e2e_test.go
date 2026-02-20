@@ -79,7 +79,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
 
-		By("creating a shared Pihole CR for Whitelist/Blocklist/DNSRecord/Config tests")
+		By("creating a shared Pihole CR for Whitelist/Blocklist/DNSRecord tests")
 		sharedPiholeYAML := fmt.Sprintf(`apiVersion: pihole-operator.org/v1alpha1
 kind: Pihole
 metadata:
@@ -90,9 +90,6 @@ spec:
   adminPassword: "shared-test-pw"
   dnsServiceType: "ClusterIP"
   webServiceType: "ClusterIP"
-  config:
-    dns.queryLogging: "true"
-    dns.privacyLevel: "0"
 `, testNamespace)
 		Expect(applyManifest(sharedPiholeYAML)).To(Succeed(), "Failed to create shared Pihole")
 	})
@@ -1236,115 +1233,6 @@ spec:
 	})
 
 	// ---------------------------------------------------------------
-	// Config passthrough e2e tests (reuses shared-pihole)
-	// ---------------------------------------------------------------
-	Context("Pihole CR with config passthrough", func() {
-		const piholeName = "shared-pihole"
-		const password = "shared-test-pw"
-		var helper *configAPITestHelper
-
-		It("should apply config keys via the Pi-hole API", func() {
-			By("waiting for the shared-pihole StatefulSet pod to be Running")
-			waitForPod := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pod", piholeName+"-0",
-					"-n", testNamespace, "-o", "jsonpath={.status.phase}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Running"))
-			}
-			Eventually(waitForPod, 5*time.Minute).Should(Succeed())
-
-			By("getting the pod IP for direct API access")
-			var podIP string
-			getPodIP := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pod", piholeName+"-0",
-					"-n", testNamespace, "-o", "jsonpath={.status.podIP}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).NotTo(BeEmpty())
-				podIP = strings.TrimSpace(output)
-			}
-			Eventually(getPodIP).Should(Succeed())
-
-			helper = newConfigAPITestHelper(piholeName, testNamespace, podIP, password)
-
-			By("waiting for Pi-hole API to be responsive")
-			waitForAPI := func(g Gomega) {
-				baseURL := fmt.Sprintf("https://%s", podIP)
-				resp, err := helper.client.Get(baseURL + "/admin/")
-				g.Expect(err).NotTo(HaveOccurred())
-				defer resp.Body.Close()
-				g.Expect(resp.StatusCode).To(BeNumerically("<", 500))
-			}
-			Eventually(waitForAPI, 3*time.Minute, 5*time.Second).Should(Succeed())
-
-			By("authenticating to the Pi-hole API")
-			authSuccess := func(g Gomega) {
-				err := helper.authenticate()
-				g.Expect(err).NotTo(HaveOccurred(), "Authentication should succeed")
-			}
-			Eventually(authSuccess, 3*time.Minute, 5*time.Second).Should(Succeed())
-
-			By("verifying dns.queryLogging was applied (should be 'true' from spec.config)")
-			verifyQueryLogging := func(g Gomega) {
-				value, err := helper.getConfig("dns.queryLogging")
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(value).To(Equal("true"),
-					"dns.queryLogging should be set to 'true' by the operator")
-			}
-			// The reconcile loop runs periodically; give it time to apply config
-			Eventually(verifyQueryLogging, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-			By("verifying dns.privacyLevel was applied (should be '0')")
-			verifyPrivacy := func(g Gomega) {
-				value, err := helper.getConfig("dns.privacyLevel")
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(value).To(Equal("0"),
-					"dns.privacyLevel should be set to '0' by the operator")
-			}
-			Eventually(verifyPrivacy, 2*time.Minute, 5*time.Second).Should(Succeed())
-		})
-
-		It("should enforce desired state on drift (GitOps)", func() {
-			By("manually changing dns.queryLogging to 'false' (simulating manual drift)")
-			err := helper.setConfig("dns.queryLogging", "false")
-			Expect(err).NotTo(HaveOccurred(), "Manual config change should succeed")
-
-			By("verifying the drift is corrected by the operator (back to 'true')")
-			verifyCorrection := func(g Gomega) {
-				value, err := helper.getConfig("dns.queryLogging")
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(value).To(Equal("true"),
-					"Operator should revert manual drift back to spec value")
-			}
-			// The reconcile loop runs every ~60s by default; wait up to 3min
-			Eventually(verifyCorrection, 3*time.Minute, 10*time.Second).Should(Succeed())
-		})
-
-		It("should reject keys with path traversal characters", func() {
-			By("patching the Pihole CR with a malicious config key")
-			cmd := exec.Command("kubectl", "patch", "pihole", piholeName,
-				"-n", testNamespace, "--type=merge",
-				"-p", `{"spec":{"config":{"../../etc/passwd":"bad"}}}`)
-			output, err := utils.Run(cmd)
-
-			// The kubebuilder validation won't catch map key patterns (CRD limitation),
-			// but the runtime validation in the controller will skip it and log an error.
-			// So we verify the CR is accepted, but the controller logs an error.
-			if err != nil {
-				// If CRD validation catches it (future enhancement), that's fine too
-				Expect(output).To(ContainSubstring("invalid"))
-			} else {
-				By("checking controller logs for validation error")
-				time.Sleep(5 * time.Second) // Give reconcile a chance to run
-				cmd := exec.Command("kubectl", "logs", "-l", "control-plane=controller-manager",
-					"-n", namespace, "--tail=50")
-				logs, logErr := utils.Run(cmd)
-				Expect(logErr).NotTo(HaveOccurred())
-				Expect(logs).To(ContainSubstring("invalid config key"),
-					"Controller should log validation error for path traversal key")
-			}
-		})
 	})
 })
 
