@@ -1231,9 +1231,6 @@ spec:
 			Eventually(verifyGone, 2*time.Minute).Should(Succeed())
 		})
 	})
-
-	// ---------------------------------------------------------------
-	})
 })
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
