@@ -1,12 +1,15 @@
 # [MANAGER]: Manager Deployment Configurations
 controllerManager:
-  imagePullSecrets: 
-    - name: github-registry-secret
+  # Optional: image pull secrets for private registries.
+  # Example:
+  # imagePullSecrets:
+  #   - name: my-registry-secret
+  imagePullSecrets: []
   replicas: 1
   container:
     image:
       repository: ghcr.io/duchaineo1/pihole-operator
-      tag: v1.0.8
+      tag: v1.0.27
     imagePullPolicy: IfNotPresent
     args:
       - "--leader-elect"

@@ -16,7 +16,6 @@ A Kubernetes operator to declaratively deploy and configure Pi-hole instances.
 
 ```bash
 helm install pihole-operator oci://ghcr.io/duchaineo1/pihole-operator/charts/pihole-operator \
-  --version v1.0.9 \
   --namespace pihole-operator --create-namespace \
   -f dist/chart/values.yaml
 ```
@@ -53,14 +52,14 @@ The operator creates a Deployment, Services (DNS + Web), a PVC, and a Secret con
 | `webServiceType` | `ClusterIP` | Service type for the web UI |
 | `dnsLoadBalancerIP` | — | Static IP for DNS LoadBalancer |
 | `webLoadBalancerIP` | — | Static IP for Web LoadBalancer |
-
-> **Service drift detection:** If you change `dnsServiceType`, `webServiceType`, `dnsLoadBalancerIP`, or `webLoadBalancerIP` after the Pihole resource is created, the operator automatically detects the difference and updates the existing Service on the next reconcile. No manual deletion of the Service is required.
 | `image` | `docker.io/pihole/pihole:2025.11.0` | Container image |
 | `resources` | — | CPU/memory requests and limits (standard Kubernetes resource requirements) |
 | `upstreamDNS` | Pi-hole defaults | List of upstream DNS servers (e.g. `["1.1.1.1", "9.9.9.9"]`) |
 | `ingress` | — | Ingress configuration for the web UI (see below) |
 | `tls` | — | TLS verification settings for Pi-hole API communication (see below) |
 | `serverTLS` | — | TLS certificate for Pi-hole's own HTTPS endpoint (see below) |
+
+> **Service drift detection:** If you change `dnsServiceType`, `webServiceType`, `dnsLoadBalancerIP`, or `webLoadBalancerIP` after the Pihole resource is created, the operator automatically detects the difference and updates the existing Service on the next reconcile. No manual deletion of the Service is required.
 
 #### Status fields
 
