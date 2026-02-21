@@ -17,7 +17,7 @@ import (
 
 // Separate e2e test for config passthrough to avoid interference with main suite.
 // This creates its own isolated Pihole instance and verifies config application.
-var _ = Describe("Config Passthrough (Isolated)", Serial, func() {
+var _ = Describe("Config Passthrough (Isolated)", Ordered, Serial, func() {
 	const testNS = "pihole-config-e2e"
 	const piholeName = "config-test-pihole"
 	const password = "config-e2e-pw-12345"
