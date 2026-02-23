@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -41,6 +42,15 @@ func (m *sidManager) stateFor(key string) *sidKeyState {
 		m.states[key] = st
 	}
 	return st
+}
+
+// Invalidate clears the cached SID for the given key, forcing re-authentication on next use.
+func (m *sidManager) Invalidate(key string) {
+	st := m.stateFor(key)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.sid = ""
+	st.obtained = time.Time{}
 }
 
 func (m *sidManager) GetOrAuthenticate(ctx context.Context, key string, validFor time.Duration, log logr.Logger, authFn func(context.Context) (string, error)) (string, error) {
@@ -83,4 +93,29 @@ func authBackoff(failures int) time.Duration {
 		return 30 * time.Second
 	}
 	return backoff
+}
+
+// httpClientCache caches HTTP clients to avoid creating new connection pools on every reconcile.
+type httpClientCache struct {
+	mu      sync.Mutex
+	clients map[string]*http.Client
+}
+
+func newHTTPClientCache() *httpClientCache {
+	return &httpClientCache{clients: make(map[string]*http.Client)}
+}
+
+var sharedHTTPClientCache = newHTTPClientCache()
+
+func (c *httpClientCache) Get(key string, builder func() *http.Client) *http.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if client, ok := c.clients[key]; ok {
+		return client
+	}
+
+	client := builder()
+	c.clients[key] = client
+	return client
 }

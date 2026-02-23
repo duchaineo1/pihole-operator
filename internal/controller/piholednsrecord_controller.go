@@ -47,12 +47,17 @@ func (r *PiholeDNSRecordReconciler) Init() {
 }
 
 // httpClientForPihole builds a per-Pihole HTTP client using TLS config from the spec.
+// Clients are cached to avoid creating new connection pools on every reconcile.
 func (r *PiholeDNSRecordReconciler) httpClientForPihole(ctx context.Context, pihole *cachev1alpha1.Pihole) (*http.Client, error) {
 	caData, err := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
 	if err != nil {
 		return nil, err
 	}
-	return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData)), nil
+	
+	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
+	return sharedHTTPClientCache.Get(cacheKey, func() *http.Client {
+		return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData))
+	}), nil
 }
 
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=piholednsrecords,verbs=get;list;watch;create;update;patch;delete

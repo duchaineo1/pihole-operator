@@ -88,12 +88,17 @@ func (r *BlocklistReconciler) Init() {
 }
 
 // httpClientForPihole builds a per-Pihole HTTP client using TLS config from the spec.
+// Clients are cached to avoid creating new connection pools on every reconcile.
 func (r *BlocklistReconciler) httpClientForPihole(ctx context.Context, pihole *cachev1alpha1.Pihole) (*http.Client, error) {
 	caData, err := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
 	if err != nil {
 		return nil, err
 	}
-	return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData)), nil
+	
+	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
+	return sharedHTTPClientCache.Get(cacheKey, func() *http.Client {
+		return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData))
+	}), nil
 }
 
 // +kubebuilder:rbac:groups=pihole-operator.org,resources=blocklists,verbs=get;list;watch;create;update;patch;delete
@@ -354,6 +359,16 @@ func (r *BlocklistReconciler) getPiholePassword(ctx context.Context, pihole *cac
 }
 
 func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
+	err := r.applyBlocklistToPodImpl(ctx, httpClient, baseURL, password, cacheKey, blocklist, log)
+	if err != nil && isAuthError(err) {
+		log.Info("Auth error detected in applyBlocklistToPod, invalidating SID and retrying")
+		sharedSIDManager.Invalidate(cacheKey)
+		return r.applyBlocklistToPodImpl(ctx, httpClient, baseURL, password, cacheKey, blocklist, log)
+	}
+	return err
+}
+
+func (r *BlocklistReconciler) applyBlocklistToPodImpl(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, blocklist *cachev1alpha1.Blocklist, log logr.Logger) error {
 	// Get session
 	sid, err := r.getSID(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
@@ -363,6 +378,9 @@ func (r *BlocklistReconciler) applyBlocklistToPod(ctx context.Context, httpClien
 	// Get existing lists
 	existingLists, err := r.getBlocklists(ctx, httpClient, baseURL, sid, log)
 	if err != nil {
+		if isAuthError(err) {
+			return err // Will be caught and retried by wrapper
+		}
 		log.Error(err, "Failed to get existing lists, will try to add anyway")
 		existingLists = []PiholeListResponse{}
 	}
@@ -432,6 +450,10 @@ func (r *BlocklistReconciler) getBlocklists(ctx context.Context, httpClient *htt
 
 	body, _ := io.ReadAll(resp.Body)
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, newAuthError(resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get lists failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
@@ -488,6 +510,10 @@ func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, httpClient
 
 	body, _ := io.ReadAll(resp.Body)
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
+
 	if resp.StatusCode == http.StatusTooManyRequests {
 		log.Info("Rate limited, will retry", "status", resp.StatusCode)
 		time.Sleep(2 * time.Second)
@@ -535,6 +561,10 @@ func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, httpCli
 
 	body, _ := io.ReadAll(resp.Body)
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("update failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
@@ -564,6 +594,10 @@ func (r *BlocklistReconciler) reloadGravity(ctx context.Context, httpClient *htt
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("gravity reload failed: status=%d, body=%s", resp.StatusCode, string(body))
