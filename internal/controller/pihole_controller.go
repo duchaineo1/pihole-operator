@@ -232,6 +232,34 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Reconcile DNS listening mode based on service exposure type.
+	// ClusterIP keeps a stricter default (local), while NodePort/LoadBalancer
+	// require "all" in many Kubernetes networking paths.
+	if len(found.Spec.Template.Spec.Containers) > 0 {
+		desiredListeningMode := dnsListeningModeForServiceType(pihole.Spec.DnsServiceType)
+		currentListeningMode := ""
+		for _, e := range found.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "FTLCONF_dns_listeningMode" {
+				currentListeningMode = e.Value
+				break
+			}
+		}
+		if currentListeningMode != desiredListeningMode {
+			newEnv := make([]corev1.EnvVar, 0, len(found.Spec.Template.Spec.Containers[0].Env))
+			for _, e := range found.Spec.Template.Spec.Containers[0].Env {
+				if e.Name != "FTLCONF_dns_listeningMode" {
+					newEnv = append(newEnv, e)
+				}
+			}
+			newEnv = append(newEnv, corev1.EnvVar{
+				Name:  "FTLCONF_dns_listeningMode",
+				Value: desiredListeningMode,
+			})
+			found.Spec.Template.Spec.Containers[0].Env = newEnv
+			needsUpdate = true
+		}
+	}
+
 	// Reconcile server TLS volume, volumeMount, and env vars
 	if len(found.Spec.Template.Spec.Containers) > 0 {
 		desiredCertKey := ""
@@ -788,6 +816,10 @@ func (r *PiholeReconciler) statefulSetForPihole(
 								Name:  "DNSMASQ_USER",
 								Value: "root",
 							},
+							{
+								Name:  "FTLCONF_dns_listeningMode",
+								Value: dnsListeningModeForServiceType(pihole.Spec.DnsServiceType),
+							},
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{
@@ -908,6 +940,18 @@ func getEnvOrDefault(value, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func dnsListeningModeForServiceType(serviceType string) string {
+	switch serviceType {
+	case string(corev1.ServiceTypeClusterIP):
+		return "local"
+	case "", string(corev1.ServiceTypeNodePort), string(corev1.ServiceTypeLoadBalancer):
+		return "all"
+	default:
+		// CRD validation should prevent unknown values; keep permissive behavior.
+		return "all"
+	}
 }
 
 func (r *PiholeReconciler) secretForPihole(
