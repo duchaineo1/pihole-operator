@@ -315,33 +315,18 @@ func (r *BlocklistReconciler) authenticatePihole(ctx context.Context, httpClient
 
 // getSID gets or refreshes a session ID
 func (r *BlocklistReconciler) getSID(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Check cache
-	if cached, ok := r.sidCache[cacheKey]; ok {
-		if time.Since(cached.Obtained) < cached.Valid {
-			log.Info("Using cached SID", "age", time.Since(cached.Obtained))
-			return cached.SID, nil
+	return sharedSIDManager.GetOrAuthenticate(ctx, cacheKey, 8*time.Minute, log, func(ctx context.Context) (string, error) {
+		sid, err := r.authenticatePihole(ctx, httpClient, baseURL, password, log)
+		if err != nil {
+			return "", err
 		}
-		log.Info("Cached SID expired", "age", time.Since(cached.Obtained))
-	}
-
-	// Authenticate
-	sid, err := r.authenticatePihole(ctx, httpClient, baseURL, password, log)
-	if err != nil {
-		return "", err
-	}
-
-	// Cache for 8 minutes (Pi-hole sessions usually valid for 10 min)
-	r.sidCache[cacheKey] = &cachedSID{
-		SID:      sid,
-		Obtained: time.Now(),
-		Valid:    8 * time.Minute,
-	}
-
-	log.Info("Successfully authenticated", "sid", sid[:8]+"...")
-	return sid, nil
+		if len(sid) >= 8 {
+			log.Info("Successfully authenticated", "sid", sid[:8]+"...")
+		} else {
+			log.Info("Successfully authenticated")
+		}
+		return sid, nil
+	})
 }
 
 // piholeAdminSecretName returns the admin secret name from status, falling back to the default name.
