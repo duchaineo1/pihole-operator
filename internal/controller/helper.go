@@ -53,14 +53,18 @@ func buildTLSConfig(cfg *v1alpha1.PiholeAPITLSConfig, caData []byte) *tls.Config
 }
 
 // buildHTTPClient builds an *http.Client with the given TLS configuration.
+// Conservative connection limits to prevent seat exhaustion.
 func buildHTTPClient(tlsCfg *tls.Config) *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig:     tlsCfg,
-			MaxIdleConns:        10,
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
+			TLSClientConfig:       tlsCfg,
+			MaxIdleConns:          2, // Reduced: limit total idle connections
+			MaxIdleConnsPerHost:   2, // Reduced: limit per-host idle connections
+			MaxConnsPerHost:       4, // NEW: hard cap on concurrent connections per host
+			IdleConnTimeout:       30 * time.Second, // Reduced: close idle conns faster
+			DisableKeepAlives:     false,
+			ResponseHeaderTimeout: 15 * time.Second,
 		},
 	}
 }
