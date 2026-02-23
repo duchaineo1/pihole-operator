@@ -26,6 +26,10 @@ type PiholeAPIClient struct {
 	SID      string // Session ID after authentication
 }
 
+func (c *PiholeAPIClient) doRequest(req *http.Request) (*http.Response, error) {
+	return doValidatedHTTPRequest(c.Client, req, true)
+}
+
 // buildTLSConfig constructs a *tls.Config from a PiholeAPITLSConfig and optional CA PEM bytes.
 //
 // Semantics:
@@ -119,7 +123,7 @@ func (c *PiholeAPIClient) Authenticate(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate: %w", err)
 	}
@@ -186,7 +190,7 @@ func (c *PiholeAPIClient) AddBlocklist(ctx context.Context, req BlocklistCreateR
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(httpReq)
+	resp, err := c.doRequest(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call API: %w", err)
 	}
@@ -226,7 +230,7 @@ func (c *PiholeAPIClient) ListBlocklists(ctx context.Context) ([]BlocklistRespon
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call API: %w", err)
 	}
@@ -266,7 +270,7 @@ func (c *PiholeAPIClient) DeleteBlocklist(ctx context.Context, listID int) error
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to call API: %w", err)
 	}
@@ -315,7 +319,7 @@ func (c *PiholeAPIClient) ListDNSHosts(ctx context.Context) ([]string, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call API: %w", err)
 	}
@@ -355,7 +359,7 @@ func (c *PiholeAPIClient) AddDNSHost(ctx context.Context, entry string) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to call API: %w", err)
 	}
@@ -386,7 +390,7 @@ func (c *PiholeAPIClient) DeleteDNSHost(ctx context.Context, entry string) error
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to call API: %w", err)
 	}
@@ -417,7 +421,7 @@ func (c *PiholeAPIClient) ListDNSCNAMEs(ctx context.Context) ([]string, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call API: %w", err)
 	}
@@ -457,7 +461,7 @@ func (c *PiholeAPIClient) AddDNSCNAME(ctx context.Context, entry string) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to call API: %w", err)
 	}
@@ -488,7 +492,7 @@ func (c *PiholeAPIClient) DeleteDNSCNAME(ctx context.Context, entry string) erro
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to call API: %w", err)
 	}
@@ -540,7 +544,7 @@ func (c *PiholeAPIClient) GetStats(ctx context.Context) (*StatsSummaryResponse, 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call stats API: %w", err)
 	}
@@ -603,7 +607,7 @@ func (c *PiholeAPIClient) UpdateBlocklist(ctx context.Context, listID int, req B
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("X-FTL-SID", c.SID)
 
-	resp, err := c.Client.Do(httpReq)
+	resp, err := c.doRequest(httpReq)
 	if err != nil {
 		return fmt.Errorf("failed to call API: %w", err)
 	}

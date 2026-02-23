@@ -283,7 +283,7 @@ func (r *BlocklistReconciler) authenticatePihole(ctx context.Context, httpClient
 
 	log.Info("Authenticating with Pi-hole", "url", authURL)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return "", fmt.Errorf("auth request failed: %w", err)
 	}
@@ -439,7 +439,7 @@ func (r *BlocklistReconciler) getBlocklists(ctx context.Context, httpClient *htt
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", sid)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +495,7 @@ func (r *BlocklistReconciler) addBlocklistSource(ctx context.Context, httpClient
 
 	log.Info("Adding blocklist source", "source", source)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -542,7 +542,7 @@ func (r *BlocklistReconciler) updateBlocklistSource(ctx context.Context, httpCli
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", sid)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -572,7 +572,7 @@ func (r *BlocklistReconciler) reloadGravity(ctx context.Context, httpClient *htt
 
 	log.Info("Triggering gravity reload")
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return fmt.Errorf("gravity request failed: %w", err)
 	}
@@ -612,7 +612,7 @@ func (r *BlocklistReconciler) removeBlocklistFromPod(ctx context.Context, httpCl
 				req, _ := http.NewRequestWithContext(ctx, "DELETE", deleteURL, nil)
 				req.Header.Set("X-FTL-SID", sid)
 
-				resp, err := httpClient.Do(req)
+				resp, err := doValidatedHTTPRequest(httpClient, req, true)
 				if err != nil {
 					log.Error(err, "Failed to delete", "source", source)
 					continue

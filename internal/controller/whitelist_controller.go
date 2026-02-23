@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -262,7 +263,11 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		})
 		now := metav1.Now()
 		whitelist.Status.LastSyncTime = &now
-		whitelist.Status.DomainsCount = int32(len(whitelist.Spec.Domains))
+		domainsCount := len(whitelist.Spec.Domains)
+		if domainsCount > math.MaxInt32 {
+			domainsCount = math.MaxInt32
+		}
+		whitelist.Status.DomainsCount = int32(domainsCount)
 	}
 
 	_ = r.Status().Update(ctx, whitelist)
@@ -290,7 +295,7 @@ func (r *WhitelistReconciler) authenticatePihole(ctx context.Context, httpClient
 
 	log.Info("Authenticating with Pi-hole", "url", authURL)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return "", fmt.Errorf("auth request failed: %w", err)
 	}
@@ -409,7 +414,7 @@ func (r *WhitelistReconciler) getWhitelistDomains(ctx context.Context, httpClien
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-FTL-SID", sid)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +469,7 @@ func (r *WhitelistReconciler) addWhitelistDomain(ctx context.Context, httpClient
 
 	log.Info("Adding whitelist domain", "domain", domain)
 
-	resp, err := httpClient.Do(req)
+	resp, err := doValidatedHTTPRequest(httpClient, req, true)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -517,7 +522,7 @@ func (r *WhitelistReconciler) removeWhitelistFromPod(ctx context.Context, httpCl
 		req.Header.Set("X-FTL-SID", sid)
 		req.Header.Set("Accept", "application/json")
 
-		resp, err := httpClient.Do(req)
+		resp, err := doValidatedHTTPRequest(httpClient, req, true)
 		if err != nil {
 			log.Error(err, "Failed to delete whitelist domain", "domain", domain)
 			continue

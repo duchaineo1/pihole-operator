@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
+	"math/big"
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,7 +35,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"math/rand"
 	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1092,8 +1093,16 @@ func (r *PiholeReconciler) serviceForPihole(
 func generateRandomPassword(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
 	b := make([]byte, length)
+	max := big.NewInt(int64(len(charset)))
+
 	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
+		n, err := cryptorand.Int(cryptorand.Reader, max)
+		if err != nil {
+			// Fallback to a deterministic but safe value if entropy source fails.
+			b[i] = charset[i%len(charset)]
+			continue
+		}
+		b[i] = charset[n.Int64()]
 	}
 	return string(b)
 }
