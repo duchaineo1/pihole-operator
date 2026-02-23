@@ -324,27 +324,9 @@ func (r *PiholeDNSRecordReconciler) authenticatePihole(ctx context.Context, http
 
 // getSID gets or refreshes a session ID
 func (r *PiholeDNSRecordReconciler) getSID(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if cached, ok := r.sidCache[cacheKey]; ok {
-		if time.Since(cached.Obtained) < cached.Valid {
-			return cached.SID, nil
-		}
-	}
-
-	sid, err := r.authenticatePihole(ctx, httpClient, baseURL, password, log)
-	if err != nil {
-		return "", err
-	}
-
-	r.sidCache[cacheKey] = &cachedSID{
-		SID:      sid,
-		Obtained: time.Now(),
-		Valid:    8 * time.Minute,
-	}
-
-	return sid, nil
+	return sharedSIDManager.GetOrAuthenticate(ctx, cacheKey, 8*time.Minute, log, func(ctx context.Context) (string, error) {
+		return r.authenticatePihole(ctx, httpClient, baseURL, password, log)
+	})
 }
 
 // getPiholePassword retrieves the admin password for a Pihole instance.
