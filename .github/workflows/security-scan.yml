@@ -45,10 +45,13 @@ jobs:
           go-version: '1.24.x'
           check-latest: true
 
-      - name: Run gosec (report-only)
+      - name: Run gosec (high only, with accepted-risk exclusions)
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -no-fail ./...
+          # Accepted risks for this project:
+          # - G402: InsecureSkipVerify is intentional default for self-signed Pi-hole deployments
+          # - G704: dynamic URL requests are guarded by internal/controller/urlguard.go
+          gosec -severity high -exclude G402,G704 ./...
 
   trivy:
     name: trivy
