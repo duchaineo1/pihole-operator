@@ -171,6 +171,16 @@ type PiholeSpec struct {
 	// Pairs with spec.tls for full end-to-end TLS configuration.
 	// +optional
 	ServerTLS *PiholeServerTLSConfig `json:"serverTLS,omitempty"`
+
+	// WebserverAPIMaxSessions sets Pi-hole's webserver API seat limit
+	// (FTLCONF_webserver_api_max_sessions).
+	//
+	// Increasing this helps avoid API/UI lockouts in busy clusters where multiple
+	// controllers and clients authenticate concurrently.
+	// +optional
+	// +kubebuilder:default=64
+	// +kubebuilder:validation:Minimum=1
+	WebserverAPIMaxSessions int32 `json:"webserverApiMaxSessions,omitempty"`
 }
 
 // PiholeIngress defines Ingress configuration for the Pi-hole web UI

@@ -298,6 +298,17 @@ spec:
                 description: WebLoadBalancerIP is the IP to use for Web LoadBalancer
                   service type
                 type: string
+              webserverApiMaxSessions:
+                default: 64
+                description: |-
+                  WebserverAPIMaxSessions sets Pi-hole's webserver API seat limit
+                  (FTLCONF_webserver_api_max_sessions).
+
+                  Increasing this helps avoid API/UI lockouts in busy clusters where multiple
+                  controllers and clients authenticate concurrently.
+                format: int32
+                minimum: 1
+                type: integer
               webServiceType:
                 default: ClusterIP
                 description: WebServiceType is the Kubernetes service type for Web

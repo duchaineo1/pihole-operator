@@ -156,10 +156,13 @@ var _ = Describe("Pihole Controller", func() {
 			for i, e := range container.Env {
 				envNames[i] = e.Name
 			}
-			Expect(envNames).To(ContainElements("TZ", "FTLCONF_webserver_api_password", "DNSMASQ_USER", "FTLCONF_dns_listeningMode"))
+			Expect(envNames).To(ContainElements("TZ", "FTLCONF_webserver_api_password", "DNSMASQ_USER", "FTLCONF_dns_listeningMode", "FTLCONF_webserver_api_max_sessions"))
 			for _, e := range container.Env {
 				if e.Name == "FTLCONF_dns_listeningMode" {
 					Expect(e.Value).To(Equal("all"))
+				}
+				if e.Name == "FTLCONF_webserver_api_max_sessions" {
+					Expect(e.Value).To(Equal("64"))
 				}
 			}
 

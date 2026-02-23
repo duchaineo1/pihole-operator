@@ -21,6 +21,11 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 	"math/big"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -35,12 +40,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"strings"
-	"time"
 )
 
 const (
@@ -821,6 +823,10 @@ func (r *PiholeReconciler) statefulSetForPihole(
 								Name:  "FTLCONF_dns_listeningMode",
 								Value: dnsListeningModeForServiceType(pihole.Spec.DnsServiceType),
 							},
+							{
+								Name:  "FTLCONF_webserver_api_max_sessions",
+								Value: strconv.Itoa(int(apiMaxSessionsOrDefault(pihole.Spec.WebserverAPIMaxSessions))),
+							},
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{
@@ -941,6 +947,13 @@ func getEnvOrDefault(value, defaultValue string) string {
 		return defaultValue
 	}
 	return value
+}
+
+func apiMaxSessionsOrDefault(v int32) int32 {
+	if v <= 0 {
+		return 64
+	}
+	return v
 }
 
 func dnsListeningModeForServiceType(serviceType string) string {
