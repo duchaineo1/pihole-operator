@@ -156,7 +156,12 @@ var _ = Describe("Pihole Controller", func() {
 			for i, e := range container.Env {
 				envNames[i] = e.Name
 			}
-			Expect(envNames).To(ContainElements("TZ", "FTLCONF_webserver_api_password", "DNSMASQ_USER"))
+			Expect(envNames).To(ContainElements("TZ", "FTLCONF_webserver_api_password", "DNSMASQ_USER", "FTLCONF_dns_listeningMode"))
+			for _, e := range container.Env {
+				if e.Name == "FTLCONF_dns_listeningMode" {
+					Expect(e.Value).To(Equal("all"))
+				}
+			}
 
 			// Check liveness probe uses HTTP GET against the web UI
 			Expect(container.LivenessProbe).NotTo(BeNil())
@@ -1030,9 +1035,75 @@ var _ = Describe("Pihole Controller", func() {
 		})
 	})
 
+	Context("DNS listening mode defaults", func() {
+		It("should default listening mode to local when DNS service type is ClusterIP", func() {
+			nn := createPihole("test-dns-listen-clusterip", cachev1alpha1.PiholeSpec{
+				DnsServiceType: "ClusterIP",
+			})
+			defer deletePihole(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			found := false
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_dns_listeningMode" {
+					Expect(e.Value).To(Equal("local"))
+					found = true
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+	})
+
 	// ---------------------------------------------------------------
 	// Service drift / update detection tests
 	// ---------------------------------------------------------------
+
+	Context("StatefulSet drift - DNS listening mode follows DNS service type", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-drift-dns-listening", cachev1alpha1.PiholeSpec{
+				DnsServiceType: "NodePort",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should update listening mode when DNS service type changes to ClusterIP", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_dns_listeningMode" {
+					Expect(e.Value).To(Equal("all"))
+				}
+			}
+
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.DnsServiceType = "ClusterIP"
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			found := false
+			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "FTLCONF_dns_listeningMode" {
+					Expect(e.Value).To(Equal("local"))
+					found = true
+				}
+			}
+			Expect(found).To(BeTrue())
+		})
+	})
 
 	Context("Service drift - DNS type change (NodePort → LoadBalancer)", func() {
 		var nn types.NamespacedName
