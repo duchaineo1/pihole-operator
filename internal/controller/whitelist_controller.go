@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -262,7 +263,11 @@ func (r *WhitelistReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		})
 		now := metav1.Now()
 		whitelist.Status.LastSyncTime = &now
-		whitelist.Status.DomainsCount = int32(len(whitelist.Spec.Domains))
+		domainsCount := len(whitelist.Spec.Domains)
+		if domainsCount > math.MaxInt32 {
+			domainsCount = math.MaxInt32
+		}
+		whitelist.Status.DomainsCount = int32(domainsCount)
 	}
 
 	_ = r.Status().Update(ctx, whitelist)
