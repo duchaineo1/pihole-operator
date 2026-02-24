@@ -1086,9 +1086,15 @@ func (r *PiholeReconciler) serviceForPihole(
 				Labels:    labels,
 			},
 			Spec: corev1.ServiceSpec{
-				Type:           serviceType,
-				LoadBalancerIP: lbIP,
-				Selector:       labels,
+				Type:            serviceType,
+				LoadBalancerIP:  lbIP,
+				Selector:        labels,
+				SessionAffinity: corev1.ServiceAffinityClientIP, // Pin clients to same pod for session persistence
+				SessionAffinityConfig: &corev1.SessionAffinityConfig{
+					ClientIP: &corev1.ClientIPConfig{
+						TimeoutSeconds: ptr.To(int32(10800)), // 3 hours
+					},
+				},
 				Ports: []corev1.ServicePort{
 					{
 						Name:       "http",
