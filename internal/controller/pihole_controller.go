@@ -21,6 +21,11 @@ import (
 	cryptorand "crypto/rand"
 	"fmt"
 	"math/big"
+	"net/http"
+	"reflect"
+	"strings"
+	"time"
+
 	piholev1alpha1 "github.com/duchaineo1/pihole-operator/api/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -35,12 +40,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"strings"
-	"time"
 )
 
 const (
@@ -447,10 +449,17 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				baseURL = override
 			}
 		}
+		
+		// Use cached HTTP client to avoid creating new connection pools on every reconcile
 		caData, _ := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
-		tlsCfg := buildTLSConfig(pihole.Spec.TLS, caData)
-		apiClient := NewPiholeAPIClient(baseURL, password, buildHTTPClient(tlsCfg))
-		if stats, statsErr := apiClient.GetStats(ctx); statsErr == nil {
+		cacheKey := fmt.Sprintf("%s/%s-stats", pihole.Namespace, pihole.Name)
+		httpClient := sharedHTTPClientCache.Get(cacheKey, func() *http.Client {
+			return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData))
+		})
+		
+		// Use shared SID manager to avoid creating new sessions on every stats fetch
+		sidCacheKey := PodCacheKey(pihole.Namespace, pihole.Name, 0)
+		if stats, statsErr := r.getStatsWithAuth(ctx, httpClient, baseURL, password, sidCacheKey, log); statsErr == nil {
 			pihole.Status.QueriesTotal = stats.Queries.Total
 			pihole.Status.QueriesBlocked = stats.Queries.Blocked
 			pihole.Status.BlockPercentage = fmt.Sprintf("%.2f%%", stats.Queries.PercentBlocked)
@@ -934,6 +943,49 @@ func piholeReadinessProbe() *corev1.Probe {
 		FailureThreshold:    3,
 		SuccessThreshold:    1, // Kubernetes API server defaults this to 1; set explicitly so reflect.DeepEqual works correctly.
 	}
+}
+
+// getStatsWithAuth fetches stats using the shared SID manager and handles auth errors.
+func (r *PiholeReconciler) getStatsWithAuth(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, log logr.Logger) (*StatsSummaryResponse, error) {
+	// Get or authenticate session
+	sid, err := sharedSIDManager.GetOrAuthenticate(ctx, cacheKey, 8*time.Minute, log, func(ctx context.Context) (string, error) {
+		apiClient := NewPiholeAPIClient(baseURL, password, httpClient)
+		if err := apiClient.Authenticate(ctx); err != nil {
+			return "", err
+		}
+		return apiClient.SID, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	
+	// Fetch stats
+	apiClient := NewPiholeAPIClient(baseURL, password, httpClient)
+	apiClient.SID = sid
+	stats, err := apiClient.GetStats(ctx)
+	
+	// If auth error, invalidate SID and retry once
+	if err != nil && (strings.Contains(err.Error(), "status=401") || strings.Contains(err.Error(), "status=403") || strings.Contains(err.Error(), "status=429")) {
+		log.Info("Auth/rate-limit error in stats fetch, invalidating SID and retrying", "error", err)
+		sharedSIDManager.Invalidate(cacheKey)
+		
+		// Re-authenticate and retry
+		sid, err = sharedSIDManager.GetOrAuthenticate(ctx, cacheKey, 8*time.Minute, log, func(ctx context.Context) (string, error) {
+			apiClient := NewPiholeAPIClient(baseURL, password, httpClient)
+			if err := apiClient.Authenticate(ctx); err != nil {
+				return "", err
+			}
+			return apiClient.SID, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		
+		apiClient.SID = sid
+		stats, err = apiClient.GetStats(ctx)
+	}
+	
+	return stats, err
 }
 
 func getEnvOrDefault(value, defaultValue string) string {
