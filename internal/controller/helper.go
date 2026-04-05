@@ -59,9 +59,9 @@ func buildHTTPClient(tlsCfg *tls.Config) *http.Client {
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig:       tlsCfg,
-			MaxIdleConns:          2, // Reduced: limit total idle connections
-			MaxIdleConnsPerHost:   2, // Reduced: limit per-host idle connections
-			MaxConnsPerHost:       4, // NEW: hard cap on concurrent connections per host
+			MaxIdleConns:          2,                // Reduced: limit total idle connections
+			MaxIdleConnsPerHost:   2,                // Reduced: limit per-host idle connections
+			MaxConnsPerHost:       4,                // NEW: hard cap on concurrent connections per host
 			IdleConnTimeout:       30 * time.Second, // Reduced: close idle conns faster
 			DisableKeepAlives:     false,
 			ResponseHeaderTimeout: 15 * time.Second,

@@ -73,7 +73,7 @@ type WhitelistDomainsWrapper struct {
 
 // WhitelistProcessed contains success/error info from domain additions
 type WhitelistProcessed struct {
-	Success []WhitelistProcessedItem `json:"success"`
+	Success []WhitelistProcessedItem  `json:"success"`
 	Errors  []WhitelistProcessedError `json:"errors"`
 }
 
@@ -102,7 +102,7 @@ func (r *WhitelistReconciler) httpClientForPihole(ctx context.Context, pihole *c
 	if err != nil {
 		return nil, err
 	}
-	
+
 	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
 	return sharedHTTPClientCache.Get(cacheKey, func() *http.Client {
 		return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData))

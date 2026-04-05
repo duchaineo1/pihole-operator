@@ -375,6 +375,34 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Reconcile the admin password secretKeyRef. When adminPasswordSecretRef is added or
+	// removed, the env var source must be updated so pods restart and pick up the new password.
+	if len(found.Spec.Template.Spec.Containers) > 0 {
+		desiredSecretName := adminSecretName(pihole)
+		desiredSecretKey := adminSecretKey(pihole)
+		for i, e := range found.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "FTLCONF_webserver_api_password" {
+				if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+					e.ValueFrom.SecretKeyRef.Name != desiredSecretName ||
+					e.ValueFrom.SecretKeyRef.Key != desiredSecretKey {
+					found.Spec.Template.Spec.Containers[0].Env[i] = corev1.EnvVar{
+						Name: "FTLCONF_webserver_api_password",
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: desiredSecretName,
+								},
+								Key: desiredSecretKey,
+							},
+						},
+					}
+					needsUpdate = true
+				}
+				break
+			}
+		}
+	}
+
 	// Reconcile readiness probe
 	if len(found.Spec.Template.Spec.Containers) > 0 {
 		if !reflect.DeepEqual(found.Spec.Template.Spec.Containers[0].ReadinessProbe, piholeReadinessProbe()) {
@@ -449,14 +477,14 @@ func (r *PiholeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				baseURL = override
 			}
 		}
-		
+
 		// Use cached HTTP client to avoid creating new connection pools on every reconcile
 		caData, _ := getCAData(ctx, r.Client, pihole.Namespace, pihole.Spec.TLS)
 		cacheKey := fmt.Sprintf("%s/%s-stats", pihole.Namespace, pihole.Name)
 		httpClient := sharedHTTPClientCache.Get(cacheKey, func() *http.Client {
 			return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData))
 		})
-		
+
 		// Use shared SID manager to avoid creating new sessions on every stats fetch
 		sidCacheKey := PodCacheKey(pihole.Namespace, pihole.Name, 0)
 		if stats, statsErr := r.getStatsWithAuth(ctx, httpClient, baseURL, password, sidCacheKey, log); statsErr == nil {
@@ -958,17 +986,17 @@ func (r *PiholeReconciler) getStatsWithAuth(ctx context.Context, httpClient *htt
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Fetch stats
 	apiClient := NewPiholeAPIClient(baseURL, password, httpClient)
 	apiClient.SID = sid
 	stats, err := apiClient.GetStats(ctx)
-	
+
 	// If auth error, invalidate SID and retry once
 	if err != nil && (strings.Contains(err.Error(), "status=401") || strings.Contains(err.Error(), "status=403") || strings.Contains(err.Error(), "status=429")) {
 		log.Info("Auth/rate-limit error in stats fetch, invalidating SID and retrying", "error", err)
 		sharedSIDManager.Invalidate(cacheKey)
-		
+
 		// Re-authenticate and retry
 		sid, err = sharedSIDManager.GetOrAuthenticate(ctx, cacheKey, 8*time.Minute, log, func(ctx context.Context) (string, error) {
 			apiClient := NewPiholeAPIClient(baseURL, password, httpClient)
@@ -980,11 +1008,11 @@ func (r *PiholeReconciler) getStatsWithAuth(ctx context.Context, httpClient *htt
 		if err != nil {
 			return nil, err
 		}
-		
+
 		apiClient.SID = sid
 		stats, err = apiClient.GetStats(ctx)
 	}
-	
+
 	return stats, err
 }
 

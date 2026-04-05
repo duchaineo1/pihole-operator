@@ -94,7 +94,7 @@ func (r *BlocklistReconciler) httpClientForPihole(ctx context.Context, pihole *c
 	if err != nil {
 		return nil, err
 	}
-	
+
 	cacheKey := fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)
 	return sharedHTTPClientCache.Get(cacheKey, func() *http.Client {
 		return buildHTTPClient(buildTLSConfig(pihole.Spec.TLS, caData))

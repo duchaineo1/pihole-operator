@@ -491,12 +491,12 @@ var _ = Describe("Blocklist Controller", func() {
 
 	Context("Cross-namespace targeting", func() {
 		const (
-			otherNS      = "bl-other-ns"
-			otherPihole  = "pihole-other"
-			allNS1       = "bl-all-ns1"
-			allNS2       = "bl-all-ns2"
-			allPihole1   = "pihole-all-1"
-			allPihole2   = "pihole-all-2"
+			otherNS     = "bl-other-ns"
+			otherPihole = "pihole-other"
+			allNS1      = "bl-all-ns1"
+			allNS2      = "bl-all-ns2"
+			allPihole1  = "pihole-all-1"
+			allPihole2  = "pihole-all-2"
 		)
 
 		// createNamespace ensures a Namespace object exists in envtest.
