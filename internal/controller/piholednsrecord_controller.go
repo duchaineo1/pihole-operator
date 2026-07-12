@@ -216,8 +216,22 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	// Total pods we must apply to across every matched Pihole. Computed up front
+	// (independent of per-Pihole password/client errors) so the success count is
+	// compared against the true target count — otherwise a Pihole that failed
+	// before its replicas were counted would make a partial apply look complete.
+	totalTargets := 0
+	for _, pihole := range piholes {
+		replicas := int32(1)
+		if pihole.Spec.Size != nil {
+			replicas = *pihole.Spec.Size
+		}
+		totalTargets += int(replicas)
+	}
+
 	// Apply to all Pihole pods
 	successCount := 0
+	mutated := false
 	var lastError error
 	for _, pihole := range piholes {
 		password, err := r.getPiholePassword(ctx, &pihole)
@@ -248,17 +262,22 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				baseURL = override
 			}
 
-			if err := r.applyDNSRecordToPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord, log); err != nil {
+			added, err := r.applyDNSRecordToPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord, log)
+			if err != nil {
 				log.Error(err, "Failed to apply DNS record", "pihole", pihole.Name, "pod", i)
 				lastError = err
 			} else {
 				successCount++
+				if added {
+					mutated = true
+				}
 			}
 		}
 	}
 
-	// Store the last-applied entry annotation
-	if successCount > 0 {
+	// Store the last-applied entry annotation, but only when it actually changed.
+	// An unconditional Update here would be a write on every pass.
+	if successCount > 0 && lastApplied != currentEntry {
 		if dnsRecord.Annotations == nil {
 			dnsRecord.Annotations = make(map[string]string)
 		}
@@ -268,28 +287,62 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	// Update status
-	if lastError != nil && successCount == 0 {
-		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+	// Update status and choose the requeue cadence. A partial apply (some pods
+	// reachable, others not — e.g. a replica mid-restart whose per-pod DNS name
+	// is briefly unresolvable) must be reported as not-Available and retried
+	// quickly, not masked as success and left until the next 5-minute resync.
+	// Masking + slow retry is exactly what left a record on only one of two
+	// replicas, so the LoadBalancer returned inconsistent answers.
+	//
+	// The status write MUST stay conditional. This controller watches its own kind,
+	// so any write here bumps resourceVersion and immediately re-triggers Reconcile.
+	// LastSyncTime was previously stamped with metav1.Now() on every pass, which made
+	// every write a real change and turned that watch into an unbounded hot loop
+	// (~22 reconciles/sec against 25 records) that starved the k3s control plane.
+	// Steady state — record already present, condition unchanged — must issue zero
+	// writes and let RequeueAfter alone drive the resync.
+	requeueAfter := 5 * time.Minute
+	var statusChanged bool
+	switch {
+	case successCount == 0:
+		msg := "Failed to apply to any Pihole pod"
+		if lastError != nil {
+			msg = fmt.Sprintf("Failed to apply: %s", lastError.Error())
+		}
+		statusChanged = meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
 			Type:    typeAvailableDNSRecord,
 			Status:  metav1.ConditionFalse,
 			Reason:  "ApplyFailed",
-			Message: fmt.Sprintf("Failed to apply: %s", lastError.Error()),
+			Message: msg,
 		})
-	} else {
-		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+		requeueAfter = 30 * time.Second
+	case successCount < totalTargets:
+		statusChanged = meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+			Type:    typeAvailableDNSRecord,
+			Status:  metav1.ConditionFalse,
+			Reason:  "PartiallyApplied",
+			Message: fmt.Sprintf("Applied to %d/%d Pihole pod(s); retrying", successCount, totalTargets),
+		})
+		requeueAfter = 30 * time.Second
+	default:
+		statusChanged = meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
 			Type:    typeAvailableDNSRecord,
 			Status:  metav1.ConditionTrue,
 			Reason:  "Applied",
-			Message: fmt.Sprintf("Applied to %d Pihole(s)", successCount),
+			Message: fmt.Sprintf("Applied to %d/%d Pihole pod(s)", successCount, totalTargets),
 		})
-		now := metav1.Now()
-		dnsRecord.Status.LastSyncTime = &now
 	}
 
-	_ = r.Status().Update(ctx, dnsRecord)
+	// LastSyncTime marks the last reconcile that actually changed something, so it
+	// cannot be the thing that makes every write "changed". Stamping it on no-op
+	// passes is what created the loop.
+	if statusChanged || mutated {
+		now := metav1.Now()
+		dnsRecord.Status.LastSyncTime = &now
+		_ = r.Status().Update(ctx, dnsRecord)
+	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // validateSpec validates the PiholeDNSRecord spec
@@ -360,11 +413,13 @@ func (r *PiholeDNSRecordReconciler) getPodConnection(ctx context.Context, httpCl
 	return baseURL, sid, nil
 }
 
-// applyDNSRecordToPod applies a DNS record to a single Pi-hole pod
-func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
+// applyDNSRecordToPod applies a DNS record to a single Pi-hole pod. It reports
+// whether the pod was actually mutated; an entry that was already present is a
+// no-op and must report false, so the caller can skip the status write.
+func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) (bool, error) {
 	baseURL, sid, err := r.getPodConnection(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	apiClient := &PiholeAPIClient{
@@ -385,13 +440,16 @@ func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, htt
 
 		for _, e := range existing {
 			if e == entry {
-				log.Info("DNS host record already exists", "entry", entry)
-				return nil
+				log.V(1).Info("DNS host record already exists", "entry", entry)
+				return false, nil
 			}
 		}
 
 		log.Info("Adding DNS host record", "entry", entry)
-		return apiClient.AddDNSHost(ctx, entry)
+		if err := apiClient.AddDNSHost(ctx, entry); err != nil {
+			return false, err
+		}
+		return true, nil
 
 	case "CNAME":
 		existing, err := apiClient.ListDNSCNAMEs(ctx)
@@ -402,16 +460,19 @@ func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, htt
 
 		for _, e := range existing {
 			if e == entry {
-				log.Info("DNS CNAME record already exists", "entry", entry)
-				return nil
+				log.V(1).Info("DNS CNAME record already exists", "entry", entry)
+				return false, nil
 			}
 		}
 
 		log.Info("Adding DNS CNAME record", "entry", entry)
-		return apiClient.AddDNSCNAME(ctx, entry)
+		if err := apiClient.AddDNSCNAME(ctx, entry); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
-	return fmt.Errorf("unsupported record type: %s", record.Spec.RecordType)
+	return false, fmt.Errorf("unsupported record type: %s", record.Spec.RecordType)
 }
 
 // removeDNSRecordFromPod removes a DNS record from a single Pi-hole pod
