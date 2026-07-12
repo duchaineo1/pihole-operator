@@ -675,6 +675,17 @@ func (r *PiholeReconciler) reconcileHeadlessService(ctx context.Context, pihole 
 		log.Error(err, "Failed to get headless Service")
 		return err
 	}
+
+	// Ensure existing headless Services pick up PublishNotReadyAddresses (added
+	// after this service may have first been created).
+	if !service.Spec.PublishNotReadyAddresses {
+		service.Spec.PublishNotReadyAddresses = true
+		log.Info("Updating headless Service to publish not-ready addresses", "Service.Namespace", service.Namespace, "Service.Name", service.Name)
+		if err := r.Update(ctx, service); err != nil {
+			log.Error(err, "Failed to update headless Service")
+			return err
+		}
+	}
 	return nil
 }
 
@@ -694,6 +705,14 @@ func (r *PiholeReconciler) headlessServiceForPihole(pihole *piholev1alpha1.Pihol
 		Spec: corev1.ServiceSpec{
 			ClusterIP: corev1.ClusterIPNone,
 			Selector:  labels,
+			// Publish per-pod DNS names even while a pod is not Ready. This
+			// service is only used by the operator for per-pod management API
+			// calls (DNS service to clients is the separate LoadBalancer), so
+			// it's safe — and it stops a pod's `<pod>.<svc>` name from briefly
+			// going NXDOMAIN during restarts/readiness flaps, which otherwise
+			// fails the operator's auth and trips a long backoff that leaves
+			// records applied to only some replicas.
+			PublishNotReadyAddresses: true,
 			Ports: []corev1.ServicePort{
 				{
 					Name:       "dns-tcp",
