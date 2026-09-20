@@ -47,11 +47,24 @@ var (
 	k8sClient client.Client
 )
 
+func init() {
+	// Mock Pi-hole servers listen on 127.0.0.1, which the URL guard rejects by default.
+	allowLoopbackTargets = true
+}
+
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 
 	RunSpecs(t, "Controller Suite")
 }
+
+// Session state is package-level, so specs that reuse a Pi-hole name would
+// otherwise inherit cached SIDs and auth backoff from earlier specs.
+var _ = BeforeEach(func() {
+	sharedSIDManager.mu.Lock()
+	sharedSIDManager.states = make(map[string]*sidKeyState)
+	sharedSIDManager.mu.Unlock()
+})
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))

@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// allowLoopbackTargets relaxes the loopback check. It exists only so unit tests
+// can point the controllers at httptest servers on 127.0.0.1.
+var allowLoopbackTargets = false
+
 // validateOutboundURL applies baseline SSRF guardrails for dynamic outbound requests.
 //
 // Policy:
@@ -35,12 +39,12 @@ func validateOutboundURL(rawURL string, allowHTTP bool) error {
 	if host == "" {
 		return fmt.Errorf("URL host is required: %q", rawURL)
 	}
-	if strings.EqualFold(host, "localhost") {
+	if strings.EqualFold(host, "localhost") && !allowLoopbackTargets {
 		return fmt.Errorf("localhost is not allowed for outbound requests")
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		if (ip.IsLoopback() && !allowLoopbackTargets) || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return fmt.Errorf("unsafe IP target is not allowed: %s", ip.String())
 		}
 	}
