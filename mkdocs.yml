@@ -1,0 +1,43 @@
+site_name: pihole-operator
+site_description: A Kubernetes operator to declaratively deploy and configure Pi-hole
+site_url: https://duchaineo1.github.io/pihole-operator/
+repo_url: https://github.com/duchaineo1/pihole-operator
+repo_name: duchaineo1/pihole-operator
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Resources:
+      - Pihole: pihole.md
+      - TLS: tls.md
+      - Blocklist: blocklist.md
+      - Whitelist: whitelist.md
+      - PiholeDNSRecord: dnsrecord.md
+  - Examples: examples.md
+  - Design: design.md
