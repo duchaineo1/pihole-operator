@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,8 +42,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -602,9 +608,29 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 	serviceName := pihole.Name + "-" + serviceKind
 	service := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: pihole.Namespace}, service)
+	if err != nil && !apierrors.IsNotFound(err) {
+		log.Error(err, "Failed to get Service", "kind", serviceKind)
+		return err
+	}
+	exists := err == nil
 
-	if err != nil && apierrors.IsNotFound(err) {
-		service, err := r.serviceForPihole(pihole, serviceKind)
+	// The web Service targets a single pod: Pi-hole keeps login sessions in
+	// memory per pod, so balancing the UI across replicas logs users out.
+	activePod := ""
+	if serviceKind == "web" {
+		current := ""
+		if exists {
+			current = service.Spec.Selector[podNameLabel]
+		}
+		activePod, err = r.activeWebPod(ctx, pihole, current)
+		if err != nil {
+			log.Error(err, "Failed to select active web pod")
+			return err
+		}
+	}
+
+	if !exists {
+		service, err := r.serviceForPihole(pihole, serviceKind, activePod)
 		if err != nil {
 			log.Error(err, "Failed to define new Service resource for pihole", "kind", serviceKind)
 			return err
@@ -616,9 +642,6 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 			return err
 		}
 		return nil
-	} else if err != nil {
-		log.Error(err, "Failed to get Service", "kind", serviceKind)
-		return err
 	}
 
 	// Service exists — diff desired vs current state and update if needed.
@@ -644,6 +667,23 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 		needsUpdate = true
 	}
 
+	if serviceKind == "web" {
+		desiredSelector := webSelector(pihole.Name, activePod)
+		if !reflect.DeepEqual(service.Spec.Selector, desiredSelector) {
+			log.Info("Switching web Service to pod", "Service.Name", service.Name,
+				"from", service.Spec.Selector[podNameLabel], "to", activePod)
+			service.Spec.Selector = desiredSelector
+			needsUpdate = true
+		}
+		// Older operator versions set ClientIP affinity, which has no effect
+		// behind a gateway/ingress and is redundant with a single-pod selector.
+		if service.Spec.SessionAffinity == corev1.ServiceAffinityClientIP {
+			service.Spec.SessionAffinity = corev1.ServiceAffinityNone
+			service.Spec.SessionAffinityConfig = nil
+			needsUpdate = true
+		}
+	}
+
 	if needsUpdate {
 		if err := r.Update(ctx, service); err != nil {
 			log.Error(err, "Failed to update Service", "Service.Name", service.Name, "kind", serviceKind)
@@ -651,6 +691,82 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 		}
 	}
 	return nil
+}
+
+// podNameLabel is set by the StatefulSet controller on every pod it creates.
+const podNameLabel = "statefulset.kubernetes.io/pod-name"
+
+// webSelector returns the web Service selector: the Pihole's common labels
+// narrowed to a single pod.
+func webSelector(piholeName, activePod string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":       "pihole",
+		"app.kubernetes.io/instance":   piholeName,
+		"app.kubernetes.io/managed-by": "pihole-operator",
+		podNameLabel:                   activePod,
+	}
+}
+
+// activeWebPod picks the pod that serves the web UI. The current pod is kept
+// while it is Ready so users are not logged out needlessly; otherwise the
+// lowest-ordinal Ready pod is chosen. With no Ready pod, the current choice
+// (or pod 0 initially) is kept.
+func (r *PiholeReconciler) activeWebPod(ctx context.Context, pihole *piholev1alpha1.Pihole, current string) (string, error) {
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.InNamespace(pihole.Namespace), client.MatchingLabels{
+		"app.kubernetes.io/instance":   pihole.Name,
+		"app.kubernetes.io/managed-by": "pihole-operator",
+	}); err != nil {
+		return "", err
+	}
+
+	best, bestOrdinal := "", -1
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		ordinal, ok := podOrdinal(pihole.Name, pod.Name)
+		if !ok || !isPodReady(pod) {
+			continue
+		}
+		if pod.Name == current {
+			return current, nil
+		}
+		if bestOrdinal == -1 || ordinal < bestOrdinal {
+			best, bestOrdinal = pod.Name, ordinal
+		}
+	}
+
+	if best != "" {
+		return best, nil
+	}
+	if current != "" {
+		return current, nil
+	}
+	return fmt.Sprintf("%s-0", pihole.Name), nil
+}
+
+// podOrdinal parses the StatefulSet ordinal from a pod name of the form {name}-{ordinal}.
+func podOrdinal(stsName, podName string) (int, bool) {
+	suffix, found := strings.CutPrefix(podName, stsName+"-")
+	if !found {
+		return 0, false
+	}
+	ordinal, err := strconv.Atoi(suffix)
+	if err != nil || ordinal < 0 {
+		return 0, false
+	}
+	return ordinal, true
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func (r *PiholeReconciler) reconcileHeadlessService(ctx context.Context, pihole *piholev1alpha1.Pihole, log logr.Logger) error {
@@ -1113,7 +1229,7 @@ func desiredServiceSpec(pihole *piholev1alpha1.Pihole, serviceKind string) (core
 }
 
 func (r *PiholeReconciler) serviceForPihole(
-	pihole *piholev1alpha1.Pihole, serviceKind string) (*corev1.Service, error) {
+	pihole *piholev1alpha1.Pihole, serviceKind, activePod string) (*corev1.Service, error) {
 
 	labels := map[string]string{
 		"app.kubernetes.io/name":       "pihole",
@@ -1133,15 +1249,9 @@ func (r *PiholeReconciler) serviceForPihole(
 				Labels:    labels,
 			},
 			Spec: corev1.ServiceSpec{
-				Type:            serviceType,
-				LoadBalancerIP:  lbIP,
-				Selector:        labels,
-				SessionAffinity: corev1.ServiceAffinityClientIP, // Pin clients to same pod for session persistence
-				SessionAffinityConfig: &corev1.SessionAffinityConfig{
-					ClientIP: &corev1.ClientIPConfig{
-						TimeoutSeconds: ptr.To(int32(10800)), // 3 hours
-					},
-				},
+				Type:           serviceType,
+				LoadBalancerIP: lbIP,
+				Selector:       webSelector(pihole.Name, activePod),
 				Ports: []corev1.ServicePort{
 					{
 						Name:       "http",
@@ -1373,5 +1483,37 @@ func (r *PiholeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&networkingv1.Ingress{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		// Pods are owned by the StatefulSet, not the Pihole, so map them back
+		// by label. Only readiness changes matter: they drive web Service failover.
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(podToPihole),
+			builder.WithPredicates(podReadinessChanged())).
 		Complete(r)
+}
+
+// podToPihole maps an operator-managed pod to its Pihole.
+func podToPihole(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels["app.kubernetes.io/managed-by"] != "pihole-operator" || labels["app.kubernetes.io/instance"] == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: obj.GetNamespace(),
+		Name:      labels["app.kubernetes.io/instance"],
+	}}}
+}
+
+// podReadinessChanged passes pod creates/deletes and updates that flip readiness.
+func podReadinessChanged() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldPod, okOld := e.ObjectOld.(*corev1.Pod)
+			newPod, okNew := e.ObjectNew.(*corev1.Pod)
+			if !okOld || !okNew {
+				return false
+			}
+			return isPodReady(oldPod) != isPodReady(newPod)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
 }
