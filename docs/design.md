@@ -44,13 +44,19 @@ For each `Pihole` the controller reconciles:
 |---|---|
 | Secret | Admin password (generated, inline, or referenced from an existing Secret) |
 | DNS Service | Port 53, type configurable (`NodePort` by default) |
-| Web Service | The web UI and API |
+| Web Service | The web UI and API, routed to a single Ready pod (see below) |
 | Headless Service | `<name>-headless`, gives each pod a stable DNS name |
 | StatefulSet | The Pi-hole pods, with a `volumeClaimTemplate` for `/etc/pihole` |
 | PodDisruptionBudget | Created when `size > 1` with `minAvailable: 1` |
 | Ingress | Optional; deleted again if disabled |
 
 It also handles drift: if Service settings such as type or load balancer IP change on the `Pihole`, the existing Service is updated on the next reconcile, with no manual deletion needed. Status (`readyReplicas`, `dnsIP`, `webURL`) and best-effort statistics from pod 0 are written back to the resource.
+
+### Web Service failover
+
+Pi-hole stores web sessions in memory per pod, so the web Service selects exactly one pod via `statefulset.kubernetes.io/pod-name`. Service `sessionAffinity: ClientIP` is not enough: gateways and ingress controllers usually send traffic straight to pod endpoints, bypassing kube-proxy, and even when they don't, the client IP kube-proxy sees is the proxy's rather than the user's.
+
+The controller watches its pods (the cache is limited to operator-managed pods) and reconciles when one's readiness changes. It keeps the current pod while it is Ready and otherwise moves to the lowest-ordinal Ready pod. If no pod is Ready, the selector is left unchanged.
 
 ### Why a StatefulSet
 

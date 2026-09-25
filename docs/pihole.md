@@ -136,6 +136,18 @@ spec:
   size: 3
 ```
 
+### Web UI with multiple replicas
+
+Pi-hole keeps web UI login sessions in memory on each pod, so spreading UI traffic across replicas logs you out as requests land on a pod that doesn't know your session. The web Service therefore targets **one pod at a time**, selected with the `statefulset.kubernetes.io/pod-name` label:
+
+- Initially the lowest-ordinal Ready pod (usually `<name>-0`).
+- If that pod stops being Ready, the operator switches the Service to the next Ready pod within seconds. You will need to log in again.
+- When the original pod recovers, the Service stays where it is, so you aren't logged out a second time.
+
+This works regardless of what sits in front of the Service (Ingress, Gateway API, LoadBalancer, `kubectl port-forward`). DNS is unaffected: the DNS Service still balances across all pods.
+
+Changes made in the web UI apply only to the pod currently serving it. Manage blocklists, whitelists and DNS records through their custom resources so they reach every pod.
+
 ## Ingress
 
 Expose the Pi-hole web UI via a Kubernetes Ingress resource:

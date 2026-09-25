@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 
@@ -32,6 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1579,5 +1582,176 @@ var _ = Describe("Pihole Controller", func() {
 				Expect(e.Name).NotTo(Equal("FTLCONF_webserver_tls_key"), "FTLCONF_webserver_tls_key should be removed")
 			}
 		})
+	})
+
+	Context("Web Service active pod", func() {
+		var nn types.NamespacedName
+
+		webSvc := func() *corev1.Service {
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: nn.Name + "-web", Namespace: "default"}, svc)).To(Succeed())
+			return svc
+		}
+
+		createPod := func(ordinal int, ready bool) *corev1.Pod {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("%s-%d", nn.Name, ordinal),
+					Namespace: "default",
+					Labels: map[string]string{
+						"app.kubernetes.io/name":             "pihole",
+						"app.kubernetes.io/instance":         nn.Name,
+						"app.kubernetes.io/managed-by":       "pihole-operator",
+						"statefulset.kubernetes.io/pod-name": fmt.Sprintf("%s-%d", nn.Name, ordinal),
+					},
+				},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "pihole", Image: "pihole"}}},
+			}
+			Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+			setPodReady(ctx, pod, ready)
+			return pod
+		}
+
+		BeforeEach(func() {
+			nn = createPihole("test-webpod", cachev1alpha1.PiholeSpec{Size: ptr.To(int32(2))})
+		})
+		AfterEach(func() {
+			for i := 0; i < 2; i++ {
+				pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%d", nn.Name, i), Namespace: "default"}}
+				_ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0))
+			}
+			deletePihole(nn)
+		})
+
+		It("should target pod 0 without session affinity before any pod is ready", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc := webSvc()
+			Expect(svc.Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-0"))
+			Expect(svc.Spec.Selector).To(HaveKeyWithValue("app.kubernetes.io/instance", "test-webpod"))
+			Expect(svc.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityNone))
+		})
+
+		It("should fail over to a ready pod and stay there when the original recovers", func() {
+			pod0 := createPod(0, true)
+			pod1 := createPod(1, true)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(webSvc().Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-0"))
+
+			By("pod 0 becoming unready")
+			setPodReady(ctx, pod0, false)
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(webSvc().Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-1"))
+
+			By("pod 0 recovering: stay on pod 1 so sessions are kept")
+			setPodReady(ctx, pod0, true)
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(webSvc().Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-1"))
+
+			By("pod 1 becoming unready")
+			setPodReady(ctx, pod1, false)
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(webSvc().Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-0"))
+		})
+
+		It("should keep the current pod when no pod is ready", func() {
+			createPod(0, false)
+			pod1 := createPod(1, true)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(webSvc().Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-1"))
+
+			setPodReady(ctx, pod1, false)
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(webSvc().Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-1"))
+		})
+
+		It("should remove ClientIP session affinity from an existing web Service", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc := webSvc()
+			svc.Spec.SessionAffinity = corev1.ServiceAffinityClientIP
+			svc.Spec.SessionAffinityConfig = &corev1.SessionAffinityConfig{
+				ClientIP: &corev1.ClientIPConfig{TimeoutSeconds: ptr.To(int32(10800))},
+			}
+			svc.Spec.Selector = map[string]string{
+				"app.kubernetes.io/name":       "pihole",
+				"app.kubernetes.io/instance":   nn.Name,
+				"app.kubernetes.io/managed-by": "pihole-operator",
+			}
+			Expect(k8sClient.Update(ctx, svc)).To(Succeed())
+
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svc = webSvc()
+			Expect(svc.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityNone))
+			Expect(svc.Spec.SessionAffinityConfig).To(BeNil())
+			Expect(svc.Spec.Selector).To(HaveKeyWithValue("statefulset.kubernetes.io/pod-name", "test-webpod-0"))
+		})
+	})
+})
+
+func setPodReady(ctx context.Context, pod *corev1.Pod, ready bool) {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}
+	Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+}
+
+var _ = Describe("Web pod selection helpers", func() {
+	It("should parse StatefulSet ordinals only for the matching name", func() {
+		ordinal, ok := podOrdinal("pihole", "pihole-2")
+		Expect(ok).To(BeTrue())
+		Expect(ordinal).To(Equal(2))
+
+		for _, name := range []string{"pihole-lb-0", "pihole-", "other-0", "pihole-x"} {
+			_, ok := podOrdinal("pihole", name)
+			Expect(ok).To(BeFalse(), name)
+		}
+	})
+
+	It("should map managed pods to their Pihole and ignore others", func() {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "pihole-lb-1", Namespace: "pihole",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance":   "pihole-lb",
+				"app.kubernetes.io/managed-by": "pihole-operator",
+			},
+		}}
+		Expect(podToPihole(context.Background(), pod)).To(ConsistOf(
+			reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "pihole", Name: "pihole-lb"}}))
+
+		pod.Labels["app.kubernetes.io/managed-by"] = "helm"
+		Expect(podToPihole(context.Background(), pod)).To(BeEmpty())
+	})
+
+	It("should only pass pod updates that change readiness", func() {
+		p := podReadinessChanged()
+		notReady := &corev1.Pod{}
+		ready := &corev1.Pod{Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+			{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+		}}}
+		readyAgain := ready.DeepCopy()
+		readyAgain.ResourceVersion = "2"
+
+		Expect(p.Update(event.UpdateEvent{ObjectOld: notReady, ObjectNew: ready})).To(BeTrue())
+		Expect(p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: readyAgain})).To(BeFalse())
+
+		terminating := ready.DeepCopy()
+		terminating.DeletionTimestamp = ptr.To(metav1.Now())
+		Expect(p.Update(event.UpdateEvent{ObjectOld: ready, ObjectNew: terminating})).To(BeTrue())
 	})
 })
