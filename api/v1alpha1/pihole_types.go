@@ -137,6 +137,16 @@ type PiholeSpec struct {
 	// +optional
 	DnsLoadBalancerIP string `json:"dnsLoadBalancerIP,omitempty"`
 
+	// DnsExternalTrafficPolicy is the externalTrafficPolicy of the DNS service when it is
+	// NodePort or LoadBalancer. "Local" preserves client source IPs so Pi-hole can show
+	// real clients, but only nodes running a Pi-hole pod accept traffic. "Cluster" accepts
+	// traffic on every node but SNATs it, so Pi-hole sees node IPs instead of clients.
+	// Ignored for ClusterIP.
+	// +optional
+	// +kubebuilder:default="Local"
+	// +kubebuilder:validation:Enum=Cluster;Local
+	DnsExternalTrafficPolicy string `json:"dnsExternalTrafficPolicy,omitempty"`
+
 	// WebLoadBalancerIP is the IP to use for Web LoadBalancer service type
 	// +optional
 	WebLoadBalancerIP string `json:"webLoadBalancerIP,omitempty"`

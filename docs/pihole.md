@@ -27,6 +27,7 @@ The operator creates a StatefulSet (one PVC per pod), DNS, Web and headless Serv
 | `dnsServiceType` | `NodePort` | Service type for DNS (`ClusterIP`, `NodePort`, `LoadBalancer`) |
 | `webServiceType` | `ClusterIP` | Service type for the web UI |
 | `dnsLoadBalancerIP` | — | Static IP for DNS LoadBalancer |
+| `dnsExternalTrafficPolicy` | `Local` | `externalTrafficPolicy` of the DNS Service (`Local`, `Cluster`). `Local` preserves client IPs in the Pi-hole query log; `Cluster` makes every node accept DNS but Pi-hole only sees node IPs. Ignored for `ClusterIP`. |
 | `webLoadBalancerIP` | — | Static IP for Web LoadBalancer |
 | `image` | `docker.io/pihole/pihole:2025.11.0` | Container image |
 | `resources` | — | CPU/memory requests and limits (standard Kubernetes resource requirements) |
@@ -35,7 +36,7 @@ The operator creates a StatefulSet (one PVC per pod), DNS, Web and headless Serv
 | `tls` | — | TLS verification settings for Pi-hole API communication (see [TLS](tls.md)) |
 | `serverTLS` | — | TLS certificate for Pi-hole's own HTTPS endpoint (see [TLS](tls.md)) |
 
-> **Service drift detection:** If you change `dnsServiceType`, `webServiceType`, `dnsLoadBalancerIP`, or `webLoadBalancerIP` after the Pihole resource is created, the operator automatically detects the difference and updates the existing Service on the next reconcile. No manual deletion of the Service is required.
+> **Service drift detection:** If you change `dnsServiceType`, `webServiceType`, `dnsLoadBalancerIP`, `dnsExternalTrafficPolicy`, or `webLoadBalancerIP` after the Pihole resource is created, the operator automatically detects the difference and updates the existing Service on the next reconcile. No manual deletion of the Service is required.
 
 ## Status fields
 

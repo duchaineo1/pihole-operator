@@ -101,6 +101,9 @@ pihole:
   # Use "ClusterIP" for cluster-internal only.
   dnsServiceType: "LoadBalancer"
   # dnsLoadBalancerIP: "192.168.1.53"  # Optional: pin to a specific IP
+  # "Local" (default) keeps real client IPs in the Pi-hole query log; "Cluster"
+  # accepts DNS on every node but Pi-hole then only sees node IPs.
+  # dnsExternalTrafficPolicy: "Local"
 
   webServiceType: "ClusterIP"
   # webLoadBalancerIP: ""
