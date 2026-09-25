@@ -1,8 +1,8 @@
 # pihole-operator
 
-[![Unit Tests](https://github.com/duchaineo1/pihole-operator/actions/workflows/test.yml/badge.svg)](https://github.com/duchaineo1/pihole-operator/actions/workflows/test.yml)
-[![E2E Tests](https://github.com/duchaineo1/pihole-operator/actions/workflows/e2e.yml/badge.svg)](https://github.com/duchaineo1/pihole-operator/actions/workflows/e2e.yml)
-[![Security Scan](https://github.com/duchaineo1/pihole-operator/actions/workflows/security-scan.yml/badge.svg)](https://github.com/duchaineo1/pihole-operator/actions/workflows/security-scan.yml)
+[![Unit Tests](https://github.com/duchaineo1/pihole-operator/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/duchaineo1/pihole-operator/actions/workflows/test.yml)
+[![E2E Tests](https://github.com/duchaineo1/pihole-operator/actions/workflows/e2e.yml/badge.svg?branch=main&event=push)](https://github.com/duchaineo1/pihole-operator/actions/workflows/e2e.yml)
+[![Security Scan](https://github.com/duchaineo1/pihole-operator/actions/workflows/security-scan.yml/badge.svg?branch=main)](https://github.com/duchaineo1/pihole-operator/actions/workflows/security-scan.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 A Kubernetes operator to declaratively deploy and configure [Pi-hole](https://pi-hole.net/).
