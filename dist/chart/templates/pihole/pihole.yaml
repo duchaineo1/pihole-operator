@@ -31,6 +31,9 @@ spec:
   {{- if .Values.pihole.dnsLoadBalancerIP }}
   dnsLoadBalancerIP: {{ .Values.pihole.dnsLoadBalancerIP | quote }}
   {{- end }}
+  {{- if .Values.pihole.dnsExternalTrafficPolicy }}
+  dnsExternalTrafficPolicy: {{ .Values.pihole.dnsExternalTrafficPolicy | quote }}
+  {{- end }}
   webServiceType: {{ .Values.pihole.webServiceType | default "ClusterIP" | quote }}
   {{- if .Values.pihole.webLoadBalancerIP }}
   webLoadBalancerIP: {{ .Values.pihole.webLoadBalancerIP | quote }}

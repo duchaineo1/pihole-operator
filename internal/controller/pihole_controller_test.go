@@ -1189,6 +1189,47 @@ var _ = Describe("Pihole Controller", func() {
 		})
 	})
 
+	Context("DNS externalTrafficPolicy", func() {
+		var nn types.NamespacedName
+
+		BeforeEach(func() {
+			nn = createPihole("test-dns-etp", cachev1alpha1.PiholeSpec{
+				DnsServiceType: "LoadBalancer",
+			})
+		})
+		AfterEach(func() { deletePihole(nn) })
+
+		It("should default to Local and follow spec changes", func() {
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			svcNN := types.NamespacedName{Name: "test-dns-etp-dns", Namespace: "default"}
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, svcNN, svc)).To(Succeed())
+			Expect(svc.Spec.ExternalTrafficPolicy).To(Equal(corev1.ServiceExternalTrafficPolicyLocal))
+
+			pihole := &cachev1alpha1.Pihole{}
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.DnsExternalTrafficPolicy = "Cluster"
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, svcNN, svc)).To(Succeed())
+			Expect(svc.Spec.ExternalTrafficPolicy).To(Equal(corev1.ServiceExternalTrafficPolicyCluster))
+
+			Expect(k8sClient.Get(ctx, nn, pihole)).To(Succeed())
+			pihole.Spec.DnsServiceType = "ClusterIP"
+			Expect(k8sClient.Update(ctx, pihole)).To(Succeed())
+
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, svcNN, svc)).To(Succeed())
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+			Expect(svc.Spec.ExternalTrafficPolicy).To(BeEmpty())
+		})
+	})
+
 	Context("Service drift - Web type change (ClusterIP → LoadBalancer)", func() {
 		var nn types.NamespacedName
 

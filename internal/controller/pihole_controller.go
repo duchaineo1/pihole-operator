@@ -667,6 +667,17 @@ func (r *PiholeReconciler) reconcileSingleService(ctx context.Context, pihole *p
 		needsUpdate = true
 	}
 
+	// An empty desired policy on a ClusterIP service clears the field, which is
+	// only valid for NodePort/LoadBalancer; on the web Service it keeps the
+	// Kubernetes default.
+	desiredETP := desiredExternalTrafficPolicy(pihole, serviceKind, desiredType)
+	if service.Spec.ExternalTrafficPolicy != desiredETP && (desiredETP != "" || desiredType == corev1.ServiceTypeClusterIP) {
+		log.Info("Updating Service externalTrafficPolicy", "Service.Name", service.Name,
+			"old", service.Spec.ExternalTrafficPolicy, "new", desiredETP)
+		service.Spec.ExternalTrafficPolicy = desiredETP
+		needsUpdate = true
+	}
+
 	if serviceKind == "web" {
 		desiredSelector := webSelector(pihole.Name, activePod)
 		if !reflect.DeepEqual(service.Spec.Selector, desiredSelector) {
@@ -1228,6 +1239,21 @@ func desiredServiceSpec(pihole *piholev1alpha1.Pihole, serviceKind string) (core
 	return serviceType, lbIP
 }
 
+// desiredExternalTrafficPolicy returns the externalTrafficPolicy for the DNS
+// Service, or "" when Kubernetes defaulting should apply (web Service) or the
+// field is not allowed (ClusterIP). "Local" is the default so kube-proxy does not
+// SNAT DNS queries and Pi-hole sees the real client IPs.
+func desiredExternalTrafficPolicy(pihole *piholev1alpha1.Pihole, serviceKind string,
+	serviceType corev1.ServiceType) corev1.ServiceExternalTrafficPolicy {
+	if serviceKind != "dns" || serviceType == corev1.ServiceTypeClusterIP {
+		return ""
+	}
+	if pihole.Spec.DnsExternalTrafficPolicy == string(corev1.ServiceExternalTrafficPolicyCluster) {
+		return corev1.ServiceExternalTrafficPolicyCluster
+	}
+	return corev1.ServiceExternalTrafficPolicyLocal
+}
+
 func (r *PiholeReconciler) serviceForPihole(
 	pihole *piholev1alpha1.Pihole, serviceKind, activePod string) (*corev1.Service, error) {
 
@@ -1276,9 +1302,10 @@ func (r *PiholeReconciler) serviceForPihole(
 				Labels:    labels,
 			},
 			Spec: corev1.ServiceSpec{
-				Type:           serviceType,
-				LoadBalancerIP: lbIP,
-				Selector:       labels,
+				Type:                  serviceType,
+				LoadBalancerIP:        lbIP,
+				ExternalTrafficPolicy: desiredExternalTrafficPolicy(pihole, serviceKind, serviceType),
+				Selector:              labels,
 				Ports: []corev1.ServicePort{
 					{
 						Name:       "dns-tcp",
