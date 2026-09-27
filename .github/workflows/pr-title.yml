@@ -1,0 +1,25 @@
+name: PR Title
+
+# PRs are squash-merged with the PR title as the commit subject, and
+# release.yml derives the version bump from it — so enforce the format.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  conventional-title:
+    name: Conventional PR title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! grep -qE '^(feat|fix|perf|refactor|docs|test|ci|chore|build|style|revert)(\([^)]+\))?!?: .+' <<< "$TITLE"; then
+            echo "PR title must follow Conventional Commits, e.g. 'fix(pihole): ...' or 'feat!: ...'"
+            echo "  feat -> minor release, '!' or BREAKING CHANGE -> major, anything else -> patch"
+            echo "Got: $TITLE"
+            exit 1
+          fi

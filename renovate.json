@@ -1,3 +1,56 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests"
+  ],
+  "timezone": "America/Toronto",
+  "schedule": ["* 0-5 * * 1"],
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "3 days",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "description": "security fixes skip the weekly window and the release-age wait",
+    "schedule": ["at any time"],
+    "minimumReleaseAge": null,
+    "automerge": true,
+    "labels": ["dependencies", "security"]
+  },
+  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "tool versions in the Makefile, annotated with # renovate: comments",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n[A-Z_]+ \\?= (?<currentValue>\\S+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "group all non-major updates into one weekly PR, automerged once required checks pass",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "groupName": "non-major dependencies",
+      "automerge": true
+    },
+    {
+      "description": "k8s libraries and controller-runtime must move together; own PR so a k8s break doesn't hold back everything else",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchPackageNames": ["k8s.io/**", "sigs.k8s.io/controller-runtime", "sigs.k8s.io/controller-tools"],
+      "groupName": "kubernetes"
+    },
+    {
+      "description": "go directive in go.mod and the golang builder image move together",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchPackageNames": ["go", "golang"],
+      "groupName": "go toolchain"
+    },
+    {
+      "description": "majors carry breaking changes: separate PRs, never automerged",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
 }
