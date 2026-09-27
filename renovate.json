@@ -9,6 +9,9 @@
   "schedule": ["* 0-5 * * 1"],
   "labels": ["dependencies"],
   "minimumReleaseAge": "3 days",
+  "platformAutomerge": false,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
     "description": "security fixes skip the weekly window and the release-age wait",
@@ -46,6 +49,11 @@
       "matchUpdateTypes": ["minor", "patch"],
       "matchPackageNames": ["go", "golang"],
       "groupName": "go toolchain"
+    },
+    {
+      "description": "Docker Hub often fails to return push dates for images with huge tag lists (golang), and Renovate then holds the update back forever. Age docker updates when a date is available, don't block when it isn't; they're digest-pinned anyway",
+      "matchDatasources": ["docker"],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
     },
     {
       "description": "the go directive in go.mod is a minimum-version constraint Renovate leaves alone by default; bump it so it moves with the builder image",
