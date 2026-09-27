@@ -115,11 +115,12 @@ jobs:
           helm registry login $REGISTRY -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
           helm push $CHART_NAME-${TAG#v}.tgz oci://$REGISTRY/${{ github.repository_owner }}
       
-      - name: Create Git tag
+      # Tag through the Releases API, not `git push`: a pushed tag whose commits
+      # touch .github/workflows is rejected for GITHUB_TOKEN, which can never
+      # hold the `workflows` permission.
+      - name: Create GitHub release and tag
         env:
           TAG: ${{ steps.vars.outputs.TAG }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag $TAG
-          git push origin $TAG
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
