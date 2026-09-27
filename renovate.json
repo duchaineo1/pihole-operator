@@ -48,9 +48,25 @@
       "groupName": "go toolchain"
     },
     {
+      "description": "the go directive in go.mod is a minimum-version constraint Renovate leaves alone by default; bump it so it moves with the builder image",
+      "matchDepTypes": ["golang"],
+      "rangeStrategy": "bump"
+    },
+    {
       "description": "majors carry breaking changes: separate PRs, never automerged",
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "description": "GitHub Actions majors: one PR instead of one per action. Not automerged — release.yml and docs.yml deploy steps don't run on PRs, so CI can't vouch for them",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "github-actions majors"
+    },
+    {
+      "description": "our own image in the chart: release.yml sets the tag at release time. Bumping it here would touch dist/chart, cut a release, and loop every week",
+      "matchPackageNames": ["ghcr.io/duchaineo1/pihole-operator"],
+      "enabled": false
     }
   ]
 }
