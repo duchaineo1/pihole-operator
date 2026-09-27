@@ -1,6 +1,6 @@
 module github.com/duchaineo1/pihole-operator
 
-go 1.24.5
+go 1.27.1
 
 replace github.com/duchaineo1/pihole-operator => ./
 
