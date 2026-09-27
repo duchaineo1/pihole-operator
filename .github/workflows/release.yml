@@ -3,6 +3,20 @@ on:
   push:
     branches:
       - main
+    # Only changes that end up in the image or the chart cut a release;
+    # ci/docs-only pushes don't.
+    paths:
+      - 'api/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'config/**'
+      - 'dist/chart/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+concurrency:
+  group: release
+  cancel-in-progress: false
 permissions:
   contents: write
   packages: write
@@ -30,7 +44,22 @@ jobs:
           LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           VERSION="${LATEST#v}"
           IFS='.' read -r major minor patch <<< "$VERSION"
-          NEW_TAG="v${major}.${minor}.$((patch + 1))"
+
+          # Bump from the conventional-commit squash titles since the last tag:
+          #   type!: / BREAKING CHANGE: -> major
+          #   feat:                     -> minor
+          #   anything else (fix, chore(deps), ...) -> patch
+          RANGE="$LATEST..HEAD"
+          [ "$LATEST" = "v0.0.0" ] && RANGE="HEAD"
+          SUBJECTS=$(git log "$RANGE" --format=%s)
+          BODIES=$(git log "$RANGE" --format=%b)
+          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<< "$SUBJECTS" || grep -qE '^BREAKING[ -]CHANGE:' <<< "$BODIES"; then
+            NEW_TAG="v$((major + 1)).0.0"
+          elif grep -qE '^feat(\([^)]*\))?:' <<< "$SUBJECTS"; then
+            NEW_TAG="v${major}.$((minor + 1)).0"
+          else
+            NEW_TAG="v${major}.${minor}.$((patch + 1))"
+          fi
           echo "Bumping from $LATEST to $NEW_TAG"
           echo "TAG=$NEW_TAG" >> "$GITHUB_OUTPUT"
       
