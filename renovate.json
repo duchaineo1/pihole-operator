@@ -9,6 +9,9 @@
   "schedule": ["* 0-5 * * 1"],
   "labels": ["dependencies"],
   "minimumReleaseAge": "3 days",
+  "platformAutomerge": false,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
     "description": "security fixes skip the weekly window and the release-age wait",
