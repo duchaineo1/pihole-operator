@@ -14,7 +14,8 @@
   "automergeStrategy": "squash",
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
-    "description": "security fixes skip the weekly window and the release-age wait",
+    "description": "security fixes skip the weekly window and the release-age wait. enabled: gomod leaves indirect deps disabled, which also drops their security fixes; this turns back on just the vulnerable ones",
+    "enabled": true,
     "schedule": ["at any time"],
     "minimumReleaseAge": null,
     "automerge": true,
