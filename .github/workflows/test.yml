@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  # release.yml runs this on the commit it is about to release
+  workflow_call:
 
 jobs:
   test:
