@@ -1,32 +1,71 @@
 name: Build and Release
 on:
-  push:
-    branches:
-      - main
-    # Only changes that end up in the image or the chart cut a release;
-    # ci/docs-only pushes don't.
-    paths:
-      - 'api/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'config/**'
-      - 'dist/chart/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
+  # Daily instead of on push: Renovate merges its weekly PRs one at a time
+  # through Monday, and a release per merge cut several in a row. One run a
+  # day releases whatever landed since the last tag, and does nothing when
+  # nothing did. 03:00 UTC is late evening in Toronto, after Monday's last
+  # merge and before the next Renovate window opens.
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
 concurrency:
   group: release
   cancel-in-progress: false
 permissions:
-  contents: write
-  packages: write
+  contents: read
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/pihole-operator
   CHART_NAME: pihole-operator
   REGISTRY: ghcr.io
 jobs:
-  build-and-release:
+  changes:
+    name: Anything to release
     runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.diff.outputs.release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # Only changes that end up in the image or the chart cut a release;
+      # ci/docs-only commits don't.
+      - name: Diff against the last tag
+        id: diff
+        run: |
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -n "$LATEST" ] && git diff --quiet "$LATEST" HEAD -- \
+              api cmd internal config dist/chart go.mod go.sum Dockerfile; then
+            echo "Nothing to release since $LATEST"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # PR checks ran on each branch; run the suites again on the commit that
+  # actually ships, with every merge since the last tag in it.
+  test:
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    uses: ./.github/workflows/test.yml
+
+  e2e:
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    uses: ./.github/workflows/e2e.yml
+
+  chart:
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    uses: ./.github/workflows/test-chart.yml
+
+  build-and-release:
+    needs: [test, e2e, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

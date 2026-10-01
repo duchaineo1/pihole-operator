@@ -2,6 +2,8 @@ name: Test Chart
 
 on:
   pull_request:
+  # release.yml runs this on the commit it is about to release
+  workflow_call:
 
 jobs:
   test-e2e:
