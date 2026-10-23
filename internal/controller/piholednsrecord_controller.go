@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,6 +200,7 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	successCount := 0
 	mutated := false
 	var lastError error
+	var conflict *dnsConflictError
 	for _, pihole := range piholes {
 		password, err := r.getPiholePassword(ctx, &pihole)
 		if err != nil {
@@ -230,6 +234,9 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			if err != nil {
 				log.Error(err, "Failed to apply DNS record", "pihole", pihole.Name, "pod", i)
 				lastError = err
+				if conflict == nil {
+					stderrors.As(err, &conflict)
+				}
 			} else {
 				successCount++
 				if added {
@@ -268,6 +275,17 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	requeueAfter := 5 * time.Minute
 	var statusChanged bool
 	switch {
+	case conflict != nil:
+		// Another entry already owns this hostname on at least one pod. It was not
+		// overwritten; retry slowly so the record picks up once the other entry
+		// is removed.
+		statusChanged = meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
+			Type:    typeAvailableDNSRecord,
+			Status:  metav1.ConditionFalse,
+			Reason:  "Conflict",
+			Message: conflict.Error(),
+		})
+		requeueAfter = 1 * time.Minute
 	case successCount == 0:
 		msg := "Failed to apply to any Pihole pod"
 		if lastError != nil {
@@ -438,10 +456,123 @@ func (r *PiholeDNSRecordReconciler) getPodConnection(ctx context.Context, httpCl
 	return baseURL, sid, nil
 }
 
-// applyDNSRecordToPod applies a DNS record to a single Pi-hole pod. It reports
-// whether the pod was actually mutated; an entry that was already present is a
-// no-op and must report false, so the caller can skip the status write.
+// dnsConflictError reports that Pi-hole already holds a different entry for the
+// record's hostname that this record did not write (a manual entry, or one
+// owned by another PiholeDNSRecord). The operator never overwrites such entries.
+type dnsConflictError struct {
+	hostname string
+	existing string
+}
+
+func (e *dnsConflictError) Error() string {
+	return fmt.Sprintf("hostname %s is already defined by another entry (%q); not overwriting", e.hostname, e.existing)
+}
+
+// findConflictingEntry returns an existing Pi-hole entry that defines the same
+// name as entry but differs from it, ignoring ownEntries (entries this record
+// wrote itself). An empty string means there is no conflict.
+//
+// Host entries use hosts-file syntax ("IP name [alias...]"). An entry that maps
+// the same name to the same IP is not a conflict (it already resolves as
+// desired), nor is one in the other address family: an A and an AAAA record for
+// the same name coexist. CNAME entries are "alias,target[,ttl]" and conflict
+// when the alias matches with a different target.
+func findConflictingEntry(recordType, entry string, existing []string, ownEntries ...string) string {
+	isOwn := func(e string) bool {
+		for _, o := range ownEntries {
+			if o != "" && e == o {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch recordType {
+	case "A", "AAAA":
+		fields := strings.Fields(entry)
+		if len(fields) < 2 {
+			return ""
+		}
+		ip, hostname := net.ParseIP(fields[0]), fields[1]
+		if ip == nil {
+			return ""
+		}
+		for _, e := range existing {
+			if isOwn(e) {
+				continue
+			}
+			ef := strings.Fields(e)
+			if len(ef) < 2 {
+				continue
+			}
+			eip := net.ParseIP(ef[0])
+			if eip == nil || (eip.To4() == nil) != (ip.To4() == nil) || eip.Equal(ip) {
+				continue
+			}
+			for _, name := range ef[1:] {
+				if strings.EqualFold(name, hostname) {
+					return e
+				}
+			}
+		}
+
+	case "CNAME":
+		alias, target, _ := strings.Cut(entry, ",")
+		for _, e := range existing {
+			if isOwn(e) {
+				continue
+			}
+			ealias, erest, _ := strings.Cut(e, ",")
+			etarget, _, _ := strings.Cut(erest, ",")
+			if strings.EqualFold(ealias, alias) && !strings.EqualFold(etarget, target) {
+				return e
+			}
+		}
+	}
+	return ""
+}
+
+// entryCoveredBy reports whether an existing host entry already maps the
+// record's hostname to the record's IP, e.g. a manual "IP name alias" line.
+// Adding our own line on top would only create a duplicate.
+func entryCoveredBy(entry string, existing []string) bool {
+	fields := strings.Fields(entry)
+	if len(fields) < 2 {
+		return false
+	}
+	ip := net.ParseIP(fields[0])
+	for _, e := range existing {
+		ef := strings.Fields(e)
+		if len(ef) < 2 {
+			continue
+		}
+		if eip := net.ParseIP(ef[0]); eip == nil || !eip.Equal(ip) {
+			continue
+		}
+		for _, name := range ef[1:] {
+			if strings.EqualFold(name, fields[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// applyDNSRecordToPod applies a DNS record to a single Pi-hole pod, re-authenticating
+// once if the cached session was rejected. It reports whether the pod was actually
+// mutated; an entry that was already present is a no-op and must report false, so
+// the caller can skip the status write.
 func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) (bool, error) {
+	added, err := r.applyDNSRecordToPodImpl(ctx, httpClient, baseURL, password, cacheKey, record, log)
+	if err != nil && isAuthError(err) {
+		log.Info("Auth error detected in applyDNSRecordToPod, invalidating SID and retrying")
+		sharedSIDManager.Invalidate(cacheKey)
+		return r.applyDNSRecordToPodImpl(ctx, httpClient, baseURL, password, cacheKey, record, log)
+	}
+	return added, err
+}
+
+func (r *PiholeDNSRecordReconciler) applyDNSRecordToPodImpl(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) (bool, error) {
 	baseURL, sid, err := r.getPodConnection(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return false, err
@@ -454,54 +585,66 @@ func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, htt
 	}
 
 	entry := r.buildEntry(record)
+	lastApplied := record.Annotations[lastAppliedEntryAnnotation]
+
+	// The existing entries must be readable: without them a conflicting entry
+	// can't be detected, and adding blindly could shadow someone else's record.
+	var existing []string
+	switch record.Spec.RecordType {
+	case "A", "AAAA":
+		existing, err = apiClient.ListDNSHosts(ctx)
+	case "CNAME":
+		existing, err = apiClient.ListDNSCNAMEs(ctx)
+	default:
+		return false, fmt.Errorf("unsupported record type: %s", record.Spec.RecordType)
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to list existing DNS entries: %w", err)
+	}
+
+	for _, e := range existing {
+		if e == entry {
+			log.V(1).Info("DNS record already exists", "entry", entry)
+			return false, nil
+		}
+	}
+
+	if c := findConflictingEntry(record.Spec.RecordType, entry, existing, lastApplied); c != "" {
+		return false, &dnsConflictError{hostname: record.Spec.Hostname, existing: c}
+	}
+
+	if record.Spec.RecordType != "CNAME" && entryCoveredBy(entry, existing) {
+		log.V(1).Info("DNS host record already covered by an existing entry", "entry", entry)
+		return false, nil
+	}
 
 	switch record.Spec.RecordType {
 	case "A", "AAAA":
-		existing, err := apiClient.ListDNSHosts(ctx)
-		if err != nil {
-			log.Error(err, "Failed to list DNS hosts, will try to add anyway")
-			existing = []string{}
-		}
-
-		for _, e := range existing {
-			if e == entry {
-				log.V(1).Info("DNS host record already exists", "entry", entry)
-				return false, nil
-			}
-		}
-
 		log.Info("Adding DNS host record", "entry", entry)
-		if err := apiClient.AddDNSHost(ctx, entry); err != nil {
-			return false, err
-		}
-		return true, nil
-
+		err = apiClient.AddDNSHost(ctx, entry)
 	case "CNAME":
-		existing, err := apiClient.ListDNSCNAMEs(ctx)
-		if err != nil {
-			log.Error(err, "Failed to list DNS CNAMEs, will try to add anyway")
-			existing = []string{}
-		}
-
-		for _, e := range existing {
-			if e == entry {
-				log.V(1).Info("DNS CNAME record already exists", "entry", entry)
-				return false, nil
-			}
-		}
-
 		log.Info("Adding DNS CNAME record", "entry", entry)
-		if err := apiClient.AddDNSCNAME(ctx, entry); err != nil {
-			return false, err
-		}
-		return true, nil
+		err = apiClient.AddDNSCNAME(ctx, entry)
 	}
-
-	return false, fmt.Errorf("unsupported record type: %s", record.Spec.RecordType)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-// removeEntryFromPod removes a specific DNS entry from a single Pi-hole pod
+// removeEntryFromPod removes a specific DNS entry from a single Pi-hole pod,
+// re-authenticating once if the cached session was rejected.
 func (r *PiholeDNSRecordReconciler) removeEntryFromPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey, recordType, entry string, log logr.Logger) error {
+	err := r.removeEntryFromPodImpl(ctx, httpClient, baseURL, password, cacheKey, recordType, entry, log)
+	if err != nil && isAuthError(err) {
+		log.Info("Auth error detected in removeEntryFromPod, invalidating SID and retrying")
+		sharedSIDManager.Invalidate(cacheKey)
+		return r.removeEntryFromPodImpl(ctx, httpClient, baseURL, password, cacheKey, recordType, entry, log)
+	}
+	return err
+}
+
+func (r *PiholeDNSRecordReconciler) removeEntryFromPodImpl(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey, recordType, entry string, log logr.Logger) error {
 	baseURL, sid, err := r.getPodConnection(ctx, httpClient, baseURL, password, cacheKey, log)
 	if err != nil {
 		return err
