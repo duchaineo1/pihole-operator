@@ -334,6 +334,10 @@ func (c *PiholeAPIClient) ListDNSHosts(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, newAuthError(resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
 	}
@@ -369,6 +373,10 @@ func (c *PiholeAPIClient) AddDNSHost(ctx context.Context, entry string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
@@ -400,7 +408,12 @@ func (c *PiholeAPIClient) DeleteDNSHost(ctx context.Context, entry string) error
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
+
+	// 404 means the entry is already gone, which is the outcome a delete wants.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
 	}
@@ -434,6 +447,10 @@ func (c *PiholeAPIClient) ListDNSCNAMEs(ctx context.Context) ([]string, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, newAuthError(resp.StatusCode)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -471,6 +488,10 @@ func (c *PiholeAPIClient) AddDNSCNAME(ctx context.Context, entry string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
@@ -502,7 +523,12 @@ func (c *PiholeAPIClient) DeleteDNSCNAME(ctx context.Context, entry string) erro
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return newAuthError(resp.StatusCode)
+	}
+
+	// 404 means the entry is already gone, which is the outcome a delete wants.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error: status=%d, body=%s", resp.StatusCode, string(body))
 	}

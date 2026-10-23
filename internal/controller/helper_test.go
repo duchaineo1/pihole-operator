@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -442,7 +443,7 @@ func TestAddDNSHost_APIError(t *testing.T) {
 }
 
 func TestDeleteDNSHost_Success(t *testing.T) {
-	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent} {
+	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent, http.StatusNotFound} {
 		t.Run(http.StatusText(statusCode), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "DELETE" {
@@ -463,8 +464,8 @@ func TestDeleteDNSHost_Success(t *testing.T) {
 
 func TestDeleteDNSHost_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
 	}))
 	defer srv.Close()
 
@@ -548,7 +549,7 @@ func TestAddDNSCNAME_APIError(t *testing.T) {
 }
 
 func TestDeleteDNSCNAME_Success(t *testing.T) {
-	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent} {
+	for _, statusCode := range []int{http.StatusOK, http.StatusNoContent, http.StatusNotFound} {
 		t.Run(http.StatusText(statusCode), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != "DELETE" {
@@ -569,8 +570,8 @@ func TestDeleteDNSCNAME_Success(t *testing.T) {
 
 func TestDeleteDNSCNAME_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
 	}))
 	defer srv.Close()
 
@@ -578,5 +579,33 @@ func TestDeleteDNSCNAME_APIError(t *testing.T) {
 	err := client.DeleteDNSCNAME(context.Background(), "alias.local,target.local")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDNSAPI_AuthErrors(t *testing.T) {
+	calls := map[string]func(*PiholeAPIClient) error{
+		"ListDNSHosts":  func(c *PiholeAPIClient) error { _, err := c.ListDNSHosts(context.Background()); return err },
+		"AddDNSHost":    func(c *PiholeAPIClient) error { return c.AddDNSHost(context.Background(), "192.168.1.1 test.local") },
+		"DeleteDNSHost": func(c *PiholeAPIClient) error { return c.DeleteDNSHost(context.Background(), "192.168.1.1 test.local") },
+		"ListDNSCNAMEs": func(c *PiholeAPIClient) error { _, err := c.ListDNSCNAMEs(context.Background()); return err },
+		"AddDNSCNAME":   func(c *PiholeAPIClient) error { return c.AddDNSCNAME(context.Background(), "alias.local,target.local") },
+		"DeleteDNSCNAME": func(c *PiholeAPIClient) error {
+			return c.DeleteDNSCNAME(context.Background(), "alias.local,target.local")
+		},
+	}
+	for name, call := range calls {
+		for _, statusCode := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+			t.Run(fmt.Sprintf("%s/%d", name, statusCode), func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(statusCode)
+				}))
+				defer srv.Close()
+
+				err := call(newAuthenticatedClient(srv))
+				if !isAuthError(err) {
+					t.Fatalf("expected auth error, got %v", err)
+				}
+			})
+		}
 	}
 }

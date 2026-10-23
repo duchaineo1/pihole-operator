@@ -31,6 +31,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -51,12 +52,20 @@ type mockDNSAPI struct {
 	addedCNAMEs    []string
 	deletedCNAMEs  []string
 	failAuth       bool
+	// rejectSID makes every API call carrying this session ID fail with 401,
+	// simulating a session Pi-hole has expired.
+	rejectSID string
 }
 
 func (m *mockDNSAPI) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
+
+		if m.rejectSID != "" && r.Header.Get("X-FTL-SID") == m.rejectSID {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 
 		switch {
 		case r.URL.Path == "/api/auth" && r.Method == "POST":
@@ -434,6 +443,175 @@ var _ = Describe("PiholeDNSRecord Controller", func() {
 				}
 			}
 			Expect(found).To(BeTrue(), "ValidationFailed condition not found")
+		})
+	})
+
+	Context("Expired Pi-hole session", func() {
+		BeforeEach(func() { setupPihole() })
+		AfterEach(func() { cleanupPihole() })
+
+		It("should re-authenticate and apply when the cached SID is rejected", func() {
+			// Seed the shared cache with a session the mock will reject.
+			cacheKey := PodCacheKey(piholeNS, piholeName, 0)
+			sharedSIDManager.Invalidate(cacheKey)
+			_, err := sharedSIDManager.GetOrAuthenticate(ctx, cacheKey, time.Hour, GinkgoLogr, func(context.Context) (string, error) {
+				return "stale-sid", nil
+			})
+			Expect(err).NotTo(HaveOccurred())
+			mock.rejectSID = "stale-sid"
+
+			nn := createDNSRecord("dns-reauth", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "reauth.local",
+				RecordType: "A",
+				IPAddress:  "10.0.0.42",
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err = doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			Expect(mock.authCalls).To(Equal(1))
+			Expect(mock.addedHosts).To(ContainElement("10.0.0.42 reauth.local"))
+			mock.mu.Unlock()
+
+			rec := &cachev1alpha1.PiholeDNSRecord{}
+			Expect(k8sClient.Get(ctx, nn, rec)).To(Succeed())
+			cond := meta.FindStatusCondition(rec.Status.Conditions, typeAvailableDNSRecord)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal("Applied"))
+		})
+	})
+
+	Context("Conflicting entries", func() {
+		BeforeEach(func() { setupPihole() })
+		AfterEach(func() { cleanupPihole() })
+
+		expectCondition := func(nn types.NamespacedName, status metav1.ConditionStatus, reason string) {
+			rec := &cachev1alpha1.PiholeDNSRecord{}
+			Expect(k8sClient.Get(ctx, nn, rec)).To(Succeed())
+			cond := meta.FindStatusCondition(rec.Status.Conditions, typeAvailableDNSRecord)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(status))
+			Expect(cond.Reason).To(Equal(reason))
+		}
+
+		It("should not overwrite a manual A entry with a different IP", func() {
+			mock.existingHosts = []string{"10.0.0.9 nas.local"}
+
+			nn := createDNSRecord("dns-conflict-a", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "nas.local",
+				RecordType: "A",
+				IPAddress:  "10.0.0.1",
+			})
+			defer deleteDNSRecord(nn)
+
+			result, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(1 * time.Minute))
+
+			mock.mu.Lock()
+			Expect(mock.addedHosts).To(BeEmpty())
+			Expect(mock.deletedHosts).To(BeEmpty())
+			mock.mu.Unlock()
+
+			expectCondition(nn, metav1.ConditionFalse, "Conflict")
+
+			rec := &cachev1alpha1.PiholeDNSRecord{}
+			Expect(k8sClient.Get(ctx, nn, rec)).To(Succeed())
+			Expect(rec.Annotations).NotTo(HaveKey(lastAppliedEntryAnnotation))
+		})
+
+		It("should not overwrite a manual CNAME with a different target", func() {
+			mock.existingCNAMEs = []string{"alias.local,elsewhere.local"}
+
+			nn := createDNSRecord("dns-conflict-cname", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:    "alias.local",
+				RecordType:  "CNAME",
+				CNAMETarget: "target.local",
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			Expect(mock.addedCNAMEs).To(BeEmpty())
+			mock.mu.Unlock()
+
+			expectCondition(nn, metav1.ConditionFalse, "Conflict")
+		})
+
+		It("should add an A record alongside an AAAA record for the same name", func() {
+			mock.existingHosts = []string{"fd00::1 dual.local"}
+
+			nn := createDNSRecord("dns-dual-stack", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "dual.local",
+				RecordType: "A",
+				IPAddress:  "10.0.0.1",
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			Expect(mock.addedHosts).To(ContainElement("10.0.0.1 dual.local"))
+			mock.mu.Unlock()
+
+			expectCondition(nn, metav1.ConditionTrue, "Applied")
+		})
+
+		It("should treat a manual entry with the same IP as already applied", func() {
+			mock.existingHosts = []string{"10.0.0.5 router.local covered.local"}
+
+			nn := createDNSRecord("dns-covered", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "covered.local",
+				RecordType: "A",
+				IPAddress:  "10.0.0.5",
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			Expect(mock.addedHosts).To(BeEmpty())
+			mock.mu.Unlock()
+
+			expectCondition(nn, metav1.ConditionTrue, "Applied")
+		})
+
+		It("should replace its own previous entry when the IP changes", func() {
+			nn := types.NamespacedName{Name: "dns-own-ip-change", Namespace: piholeNS}
+			rec := &cachev1alpha1.PiholeDNSRecord{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        nn.Name,
+					Namespace:   nn.Namespace,
+					Finalizers:  []string{dnsRecordFinalizer},
+					Annotations: map[string]string{lastAppliedEntryAnnotation: "10.0.0.1 moved.local"},
+				},
+				Spec: cachev1alpha1.PiholeDNSRecordSpec{
+					Hostname:   "moved.local",
+					RecordType: "A",
+					IPAddress:  "10.0.0.2",
+				},
+			}
+			Expect(k8sClient.Create(ctx, rec)).To(Succeed())
+			defer deleteDNSRecord(nn)
+			// The mock's DELETE doesn't remove from existingHosts, so the old
+			// entry is still listed: it must be recognised as our own.
+			mock.existingHosts = []string{"10.0.0.1 moved.local"}
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			Expect(mock.deletedHosts).To(ContainElement("10.0.0.1 moved.local"))
+			Expect(mock.addedHosts).To(ContainElement("10.0.0.2 moved.local"))
+			mock.mu.Unlock()
+
+			expectCondition(nn, metav1.ConditionTrue, "Applied")
 		})
 	})
 
