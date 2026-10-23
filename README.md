@@ -32,7 +32,7 @@ YAML
 Full docs: **https://duchaineo1.github.io/pihole-operator/**
 
 - [Getting started](docs/getting-started.md)
-- Resources: [Pihole](docs/pihole.md), [Blocklist](docs/blocklist.md), [Whitelist](docs/whitelist.md), [PiholeDNSRecord](docs/dnsrecord.md)
+- Resources: [Pihole](docs/pihole.md), [Blocklist](docs/blocklist.md), [Whitelist](docs/whitelist.md), [PiholeDNSRecord](docs/dnsrecord.md), [DNS from Services](docs/service-dns.md)
 - [Design](docs/design.md): architecture and decisions
 - [Examples](examples/)
 

@@ -35,6 +35,14 @@ spec:
             {{- range .Values.controllerManager.container.args }}
             - {{ . }}
             {{- end }}
+            {{- with .Values.serviceDNS }}
+            {{- if and (hasKey . "enabled") (not .enabled) }}
+            - --enable-service-dns=false
+            {{- end }}
+            {{- if .defaultTargetNamespaces }}
+            - {{ printf "--service-dns-default-target-namespaces=%s" .defaultTargetNamespaces | quote }}
+            {{- end }}
+            {{- end }}
           command:
             - /manager
           image: {{ .Values.controllerManager.container.image.repository }}:{{ .Values.controllerManager.container.image.tag }}

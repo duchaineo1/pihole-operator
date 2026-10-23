@@ -10,6 +10,7 @@ Instead of clicking through the Pi-hole UI, describe what you want as Kubernetes
 | [`Blocklist`](blocklist.md) | Ad-blocking lists, pushed to every Pi-hole pod |
 | [`Whitelist`](whitelist.md) | Allow-listed domains (false positives) |
 | [`PiholeDNSRecord`](dnsrecord.md) | Local `A`, `AAAA` and `CNAME` records |
+| [Service annotations](service-dns.md) | DNS records generated from annotated `Service`s |
 
 ## Where to go next
 

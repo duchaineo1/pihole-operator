@@ -1,0 +1,46 @@
+# DNS records generated from Service annotations
+#
+# The operator creates a PiholeDNSRecord for each hostname once the Service has
+# an address, and removes it when the annotation or the Service is deleted.
+# See docs/service-dns.md.
+
+---
+# Example 1: LoadBalancer Service. The records point at the LoadBalancer IP
+# (e.g. assigned by MetalLB) and are pushed to the Piholes in "pihole-system".
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: media
+  annotations:
+    pihole-operator.org/hostnames: "jellyfin.home.example.com,tv.home.example.com"
+    pihole-operator.org/target-namespaces: "pihole-system"
+spec:
+  type: LoadBalancer
+  selector:
+    app: jellyfin
+  ports:
+    - name: http
+      port: 8096
+      targetPort: 8096
+
+---
+# Example 2: a Service fronted by something the operator can't see (e.g. a
+# reverse proxy on the host). The ip annotation sets the address explicitly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  annotations:
+    pihole-operator.org/hostnames: "grafana.home.example.com"
+    pihole-operator.org/ip: "192.168.1.20"
+    pihole-operator.org/target-namespaces: "pihole-system"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
