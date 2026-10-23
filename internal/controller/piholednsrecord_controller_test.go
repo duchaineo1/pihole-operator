@@ -30,6 +30,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -502,6 +503,92 @@ var _ = Describe("PiholeDNSRecord Controller", func() {
 				err := k8sClient.Get(ctx, nn, &cachev1alpha1.PiholeDNSRecord{})
 				return err != nil
 			}).Should(BeTrue())
+		})
+	})
+
+	Context("Deletion without a matching Pihole", func() {
+		// markForDeletion creates a record that already carries the finalizer (as
+		// if it had been applied earlier) and deletes it, leaving it terminating.
+		markForDeletion := func(name string, spec cachev1alpha1.PiholeDNSRecordSpec) types.NamespacedName {
+			nn := types.NamespacedName{Name: name, Namespace: piholeNS}
+			rec := &cachev1alpha1.PiholeDNSRecord{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       name,
+					Namespace:  piholeNS,
+					Finalizers: []string{dnsRecordFinalizer},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, rec)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, rec)).To(Succeed())
+			return nn
+		}
+
+		It("should remove the finalizer when the Pihole no longer exists", func() {
+			nn := markForDeletion("dns-delete-no-pihole", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "orphan.local",
+				RecordType: "A",
+				IPAddress:  "192.168.1.77",
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, nn, &cachev1alpha1.PiholeDNSRecord{}))
+			}).Should(BeTrue())
+		})
+
+		It("should remove the finalizer when the spec is invalid", func() {
+			setupPihole()
+			defer cleanupPihole()
+
+			nn := markForDeletion("dns-delete-invalid", cachev1alpha1.PiholeDNSRecordSpec{
+				Hostname:   "invalid.local",
+				RecordType: "A",
+				// no IPAddress: fails validateSpec
+			})
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, nn, &cachev1alpha1.PiholeDNSRecord{}))
+			}).Should(BeTrue())
+		})
+	})
+
+	Context("Deletion after a spec edit", func() {
+		BeforeEach(func() { setupPihole() })
+		AfterEach(func() { cleanupPihole() })
+
+		It("should remove the last-applied entry rather than the edited spec", func() {
+			nn := types.NamespacedName{Name: "dns-delete-edited", Namespace: piholeNS}
+			rec := &cachev1alpha1.PiholeDNSRecord{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        nn.Name,
+					Namespace:   nn.Namespace,
+					Finalizers:  []string{dnsRecordFinalizer},
+					Annotations: map[string]string{lastAppliedEntryAnnotation: "10.0.0.1 edited.local"},
+				},
+				Spec: cachev1alpha1.PiholeDNSRecordSpec{
+					Hostname:   "edited.local",
+					RecordType: "A",
+					IPAddress:  "10.0.0.2",
+				},
+			}
+			Expect(k8sClient.Create(ctx, rec)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, rec)).To(Succeed())
+			defer deleteDNSRecord(nn)
+
+			_, err := doReconcile(nn)
+			Expect(err).NotTo(HaveOccurred())
+
+			mock.mu.Lock()
+			defer mock.mu.Unlock()
+			Expect(mock.deletedHosts).To(ConsistOf("10.0.0.1 edited.local"))
 		})
 	})
 
