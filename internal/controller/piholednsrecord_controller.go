@@ -80,6 +80,13 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion before validation and the NoPihole early return: a record
+	// whose Pihole is gone (or whose spec was edited into an invalid state) must
+	// still release its finalizer, otherwise it can never be deleted.
+	if !dnsRecord.ObjectMeta.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, dnsRecord, log)
+	}
+
 	// Validate spec
 	if err := r.validateSpec(dnsRecord); err != nil {
 		meta.SetStatusCondition(&dnsRecord.Status.Conditions, metav1.Condition{
@@ -109,49 +116,6 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		})
 		_ = r.Status().Update(ctx, dnsRecord)
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
-	}
-
-	// Handle deletion
-	if !dnsRecord.ObjectMeta.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(dnsRecord, dnsRecordFinalizer) {
-			for _, pihole := range piholes {
-				password, err := r.getPiholePassword(ctx, &pihole)
-				if err != nil {
-					log.Error(err, "Failed to get password for removal", "pihole", pihole.Name)
-					continue
-				}
-
-				httpClient, err := r.httpClientForPihole(ctx, &pihole)
-				if err != nil {
-					log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
-					continue
-				}
-
-				replicas := int32(1)
-				if pihole.Spec.Size != nil {
-					replicas = *pihole.Spec.Size
-				}
-
-				for i := int32(0); i < replicas; i++ {
-					baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
-					cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
-					if override, ok := r.BaseURLOverride[cacheKey]; ok {
-						baseURL = override
-					} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
-						baseURL = override
-					}
-
-					if err := r.removeDNSRecordFromPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord, log); err != nil {
-						log.Error(err, "Failed to remove DNS record", "pihole", pihole.Name, "pod", i)
-					}
-				}
-			}
-			controllerutil.RemoveFinalizer(dnsRecord, dnsRecordFinalizer)
-			if err := r.Update(ctx, dnsRecord); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer
@@ -345,6 +309,67 @@ func (r *PiholeDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
+// reconcileDelete removes the record from every reachable Pihole pod and releases
+// the finalizer. Removal is best-effort: if no Pihole matches anymore there is
+// nothing left to clean up, and an unreachable pod must not block deletion.
+func (r *PiholeDNSRecordReconciler) reconcileDelete(ctx context.Context, dnsRecord *cachev1alpha1.PiholeDNSRecord, log logr.Logger) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(dnsRecord, dnsRecordFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	piholes, err := listPiholesForNamespaces(ctx, r.Client, dnsRecord.Namespace, dnsRecord.Spec.TargetNamespaces)
+	if err != nil {
+		log.Error(err, "Failed to list Piholes for removal")
+		return ctrl.Result{}, err
+	}
+
+	// Prefer the entry that was actually written: if the spec was edited after
+	// the last successful apply, the spec-derived entry is not what Pi-hole holds.
+	entry := r.buildEntry(dnsRecord)
+	if lastApplied := dnsRecord.Annotations[lastAppliedEntryAnnotation]; lastApplied != "" {
+		entry = lastApplied
+	}
+
+	for _, pihole := range piholes {
+		password, err := r.getPiholePassword(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to get password for removal", "pihole", pihole.Name)
+			continue
+		}
+
+		httpClient, err := r.httpClientForPihole(ctx, &pihole)
+		if err != nil {
+			log.Error(err, "Failed to build HTTP client for pihole", "pihole", pihole.Name)
+			continue
+		}
+
+		replicas := int32(1)
+		if pihole.Spec.Size != nil {
+			replicas = *pihole.Spec.Size
+		}
+
+		for i := int32(0); i < replicas; i++ {
+			baseURL := PodBaseURL(pihole.Name, pihole.Namespace, i)
+			cacheKey := PodCacheKey(pihole.Namespace, pihole.Name, i)
+			if override, ok := r.BaseURLOverride[cacheKey]; ok {
+				baseURL = override
+			} else if override, ok := r.BaseURLOverride[fmt.Sprintf("%s/%s", pihole.Namespace, pihole.Name)]; ok {
+				baseURL = override
+			}
+
+			if err := r.removeEntryFromPod(ctx, httpClient, baseURL, password, cacheKey, dnsRecord.Spec.RecordType, entry, log); err != nil {
+				log.Error(err, "Failed to remove DNS record", "pihole", pihole.Name, "pod", i)
+			}
+		}
+	}
+
+	controllerutil.RemoveFinalizer(dnsRecord, dnsRecordFinalizer)
+	if err := r.Update(ctx, dnsRecord); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
 // validateSpec validates the PiholeDNSRecord spec
 func (r *PiholeDNSRecordReconciler) validateSpec(record *cachev1alpha1.PiholeDNSRecord) error {
 	switch record.Spec.RecordType {
@@ -473,12 +498,6 @@ func (r *PiholeDNSRecordReconciler) applyDNSRecordToPod(ctx context.Context, htt
 	}
 
 	return false, fmt.Errorf("unsupported record type: %s", record.Spec.RecordType)
-}
-
-// removeDNSRecordFromPod removes a DNS record from a single Pi-hole pod
-func (r *PiholeDNSRecordReconciler) removeDNSRecordFromPod(ctx context.Context, httpClient *http.Client, baseURL, password, cacheKey string, record *cachev1alpha1.PiholeDNSRecord, log logr.Logger) error {
-	entry := r.buildEntry(record)
-	return r.removeEntryFromPod(ctx, httpClient, baseURL, password, cacheKey, record.Spec.RecordType, entry, log)
 }
 
 // removeEntryFromPod removes a specific DNS entry from a single Pi-hole pod
