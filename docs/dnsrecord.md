@@ -4,6 +4,8 @@ Create a `PiholeDNSRecord` resource to manage local DNS records. Records are aut
 
 Supported record types: `A`, `AAAA`, and `CNAME`.
 
+For in-cluster workloads you usually don't need to write these by hand: [annotate the Service](service-dns.md) and the operator generates the records for you.
+
 ```yaml
 apiVersion: pihole-operator.org/v1alpha1
 kind: PiholeDNSRecord

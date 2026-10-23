@@ -39,5 +39,6 @@ nav:
       - Blocklist: blocklist.md
       - Whitelist: whitelist.md
       - PiholeDNSRecord: dnsrecord.md
+      - DNS from Services: service-dns.md
   - Examples: examples.md
   - Design: design.md

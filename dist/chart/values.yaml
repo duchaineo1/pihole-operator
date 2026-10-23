@@ -46,6 +46,15 @@ controllerManager:
   terminationGracePeriodSeconds: 10
   serviceAccountName: pihole-operator-controller-manager
 
+# [SERVICE DNS]: Generate PiholeDNSRecords from Services annotated with
+# pihole-operator.org/hostnames. See docs/service-dns.md.
+serviceDNS:
+  enabled: true
+  # Comma-separated namespaces whose Piholes receive records from Services
+  # without the pihole-operator.org/target-namespaces annotation, e.g.
+  # "pihole-system", or "*" for all. Empty means the Service's own namespace.
+  defaultTargetNamespaces: ""
+
 # [RBAC]: To enable RBAC (Permissions) configurations
 rbac:
   enable: true

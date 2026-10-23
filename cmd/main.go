@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -65,6 +66,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var enableServiceDNS bool
+	var serviceDNSDefaultTargetNamespaces string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -83,6 +86,11 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&enableServiceDNS, "enable-service-dns", true,
+		"If set, Services annotated with pihole-operator.org/hostnames get PiholeDNSRecords generated for them.")
+	flag.StringVar(&serviceDNSDefaultTargetNamespaces, "service-dns-default-target-namespaces", "",
+		"Comma-separated targetNamespaces for records generated from Services without the "+
+			"pihole-operator.org/target-namespaces annotation (\"*\" for all). Empty means the Service's own namespace.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -218,6 +226,23 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Whitelist")
 		os.Exit(1)
+	}
+	if enableServiceDNS {
+		var defaultTargetNamespaces []string
+		for _, ns := range strings.Split(serviceDNSDefaultTargetNamespaces, ",") {
+			if ns = strings.TrimSpace(ns); ns != "" {
+				defaultTargetNamespaces = append(defaultTargetNamespaces, ns)
+			}
+		}
+		if err := (&controller.ServiceDNSReconciler{
+			Client:                  mgr.GetClient(),
+			Scheme:                  mgr.GetScheme(),
+			Recorder:                mgr.GetEventRecorder("service-dns"),
+			DefaultTargetNamespaces: defaultTargetNamespaces,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ServiceDNS")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

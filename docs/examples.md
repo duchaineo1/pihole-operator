@@ -15,6 +15,7 @@ See the [`examples/`](https://github.com/duchaineo1/pihole-operator/tree/main/ex
 - [`cross-namespace-dnsrecord.yaml`](https://github.com/duchaineo1/pihole-operator/blob/main/examples/cross-namespace-dnsrecord.yaml) — PiholeDNSRecord targeting Piholes in other namespaces
 - [`whitelist.yaml`](https://github.com/duchaineo1/pihole-operator/blob/main/examples/whitelist.yaml) — domain allow list for false positives
 - [`dnsrecord.yaml`](https://github.com/duchaineo1/pihole-operator/blob/main/examples/dnsrecord.yaml) — local DNS records (A and CNAME)
+- [`service-dns.yaml`](https://github.com/duchaineo1/pihole-operator/blob/main/examples/service-dns.yaml) — DNS records generated from Service annotations
 
 Apply an example:
 
